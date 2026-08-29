@@ -183,14 +183,20 @@ function rankHospitals(hospitals, crisisType) {
 
 // ---------------------------------------------------------------------------
 
+// Point this at wherever backend_server.js is actually running. Left as
+// localhost:4000 to match `node backend_server.js`'s default PORT.
+const API_BASE = "http://localhost:4000";
+
 export default function App() {
   const [mode, setMode] = useState("patient");
   const [hospitals, setHospitals] = useState(HOSPITALS_INIT);
   const [requests, setRequests] = useState([]);
   const [globalCrisis, setGlobalCrisis] = useState(false);
   const [dark, setDark] = useState(false);
+  const [backendOnline, setBackendOnline] = useState(null); // null = still checking
   const theme = dark ? "dark" : "light";
 
+  // Cosmetic freshness tick — purely local, doesn't need the backend.
   useEffect(() => {
     const id = setInterval(() => {
       setHospitals((prev) => prev.map((h) => ({
@@ -201,32 +207,93 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  function adjustStock(hospitalId, key, delta) {
+  // On load: ping the backend, and if it's up, replace the built-in mock
+  // hospitals with whatever the backend holds (its own mock_hospitals.json).
+  useEffect(() => {
+    (async () => {
+      try {
+        const ping = await fetch(`${API_BASE}/api/health`);
+        if (!ping.ok) throw new Error();
+        setBackendOnline(true);
+        const [hRes, rRes] = await Promise.all([
+          fetch(`${API_BASE}/api/hospitals`),
+          fetch(`${API_BASE}/api/dispatch`),
+        ]);
+        if (hRes.ok) setHospitals(await hRes.json());
+        if (rRes.ok) setRequests(await rRes.json());
+      } catch {
+        setBackendOnline(false); // backend not running — the app still works on local mock data
+      }
+    })();
+  }, []);
+
+  // Every handler below updates local state immediately (so the UI never
+  // waits on a network round trip), then best-effort mirrors the change to
+  // the backend if it's reachable. If the backend call fails, the local
+  // state is already correct, so the app keeps working either way.
+
+  async function adjustStock(hospitalId, key, delta) {
     setHospitals((prev) => prev.map((h) => h.id === hospitalId ? {
       ...h,
       stock: { ...h.stock, [key]: Math.max(0, h.stock[key] + delta) },
       freshness: { ...h.freshness, [key]: 0 },
     } : h));
+    try {
+      await fetch(`${API_BASE}/api/hospitals/${hospitalId}/inventory`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key, delta }),
+      });
+    } catch { /* offline — local state already applied */ }
   }
 
-  function setHospitalCrisisType(hospitalId, type) {
+  async function setHospitalCrisisType(hospitalId, type) {
     setHospitals((prev) => prev.map((h) => h.id === hospitalId ? { ...h, currentCrisisType: type } : h));
+    try {
+      await fetch(`${API_BASE}/api/hospitals/${hospitalId}/crisis-type`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type }),
+      });
+    } catch { /* offline — local state already applied */ }
   }
 
-  function createRequest(req) {
-    setRequests((prev) => [{ ...req, id: `r${prev.length + 1}`, status: "dispatched", createdAt: Date.now() }, ...prev]);
+  // Returns the created request (with its real id) so callers — like the
+  // Patient tab's tracking card — know exactly which request to watch.
+  async function createRequest(req) {
+    try {
+      const res = await fetch(`${API_BASE}/api/dispatch`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(req),
+      });
+      if (!res.ok) throw new Error();
+      const created = await res.json();
+      setRequests((prev) => [created, ...prev]);
+      return created;
+    } catch {
+      // offline fallback — assign a local id the same way the old code did
+      const created = { ...req, id: `local-${Date.now()}`, status: "dispatched", createdAt: Date.now() };
+      setRequests((prev) => [created, ...prev]);
+      return created;
+    }
   }
 
-  function advanceRequest(id) {
+  async function advanceRequest(id) {
     const order = ["dispatched", "en_route", "arrived", "handed_off"];
-    setRequests((prev) => prev.map((r) => {
-      if (r.id !== id) return r;
-      const i = order.indexOf(r.status);
-      return i < order.length - 1 ? { ...r, status: order[i + 1] } : r;
-    }));
+    try {
+      const res = await fetch(`${API_BASE}/api/dispatch/${id}/advance`, { method: "PATCH" });
+      if (!res.ok) throw new Error();
+      const updated = await res.json();
+      setRequests((prev) => prev.map((r) => (r.id === id ? updated : r)));
+    } catch {
+      setRequests((prev) => prev.map((r) => {
+        if (r.id !== id) return r;
+        const i = order.indexOf(r.status);
+        return i < order.length - 1 ? { ...r, status: order[i + 1] } : r;
+      }));
+    }
   }
 
   function updateRequestCrisisType(id, type) {
+    // No dedicated backend endpoint for this yet — stays local for now.
     setRequests((prev) => prev.map((r) => r.id === id ? { ...r, confirmedType: type } : r));
   }
 
@@ -255,6 +322,13 @@ export default function App() {
             <span className="hidden sm:inline text-xs font-mono text-[var(--muted)] ml-1">every second matters</span>
           </div>
           <div className="flex items-center gap-2">
+            <span
+              title={backendOnline ? "backend_server.js is reachable at :4000" : "Backend not reachable — running on local mock data"}
+              className="hidden sm:flex items-center gap-1.5 text-[10px] font-mono text-[var(--muted)] px-2 py-1 rounded-full bg-[var(--pill)]"
+            >
+              <span className="w-1.5 h-1.5 rounded-full" style={{ background: backendOnline ? C.green : backendOnline === false ? C.red : C.amber }} />
+              {backendOnline ? "backend online" : backendOnline === false ? "backend offline" : "checking…"}
+            </span>
             <div className="flex items-center gap-1 bg-[var(--pill)] rounded-full p-1">
               {tabs.map((t) => {
                 const Icon = t.icon;
@@ -283,7 +357,7 @@ export default function App() {
       </header>
 
       <main className="max-w-6xl mx-auto px-5 py-6">
-        {mode === "patient" && <PatientView hospitals={hospitals} requests={requests} createRequest={createRequest} />}
+        {mode === "patient" && <PatientView hospitals={hospitals} requests={requests} createRequest={createRequest} backendOnline={backendOnline} />}
         {mode === "hospital" && (
           <HospitalView hospitals={hospitals} requests={requests} adjustStock={adjustStock}
             setHospitalCrisisType={setHospitalCrisisType} updateRequestCrisisType={updateRequestCrisisType}
@@ -299,15 +373,19 @@ export default function App() {
 // ---------------------------------------------------------------------------
 // PATIENT VIEW — voice/text intake -> AI severity -> ranked hospitals -> dispatch
 // ---------------------------------------------------------------------------
-function PatientView({ hospitals, requests, createRequest }) {
+function PatientView({ hospitals, requests, createRequest, backendOnline }) {
   const [text, setText] = useState("");
   const [listening, setListening] = useState(false);
   const [result, setResult] = useState(null);
+  const [resultSource, setResultSource] = useState(null); // "backend" | "local"
+  const [ranked, setRanked] = useState([]);
+  const [rankSource, setRankSource] = useState(null);
+  const [analyzing, setAnalyzing] = useState(false);
   const [showFormula, setShowFormula] = useState(false);
   const [myRequestId, setMyRequestId] = useState(null);
+  const [dispatching, setDispatching] = useState(false);
 
   const myRequest = requests.find((r) => r.id === myRequestId);
-  const ranked = useMemo(() => result ? rankHospitals(hospitals, result.type) : [], [hospitals, result]);
 
   function startVoice() {
     setListening(true);
@@ -317,20 +395,50 @@ function PatientView({ hospitals, requests, createRequest }) {
     }, 1400);
   }
 
-  function analyze() {
+  async function analyze() {
     if (!text.trim()) return;
-    setResult(analyzeSeverity(text));
+    setAnalyzing(true);
     setMyRequestId(null);
+
+    // 1. Severity scoring — try the backend's /api/triage first.
+    let severity;
+    try {
+      const res = await fetch(`${API_BASE}/api/triage`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }),
+      });
+      if (!res.ok) throw new Error();
+      severity = await res.json();
+      setResultSource("backend");
+    } catch {
+      severity = analyzeSeverity(text); // local fallback, identical formula
+      setResultSource("local");
+    }
+    setResult(severity);
+
+    // 2. Hospital ranking — try the backend's /api/hospitals/rank, which
+    // ranks *its own* copy of the hospital data, not this tab's local state.
+    try {
+      const res = await fetch(`${API_BASE}/api/hospitals/rank?crisisType=${encodeURIComponent(severity.type)}`);
+      if (!res.ok) throw new Error();
+      setRanked(await res.json());
+      setRankSource("backend");
+    } catch {
+      setRanked(rankHospitals(hospitals, severity.type)); // local fallback
+      setRankSource("local");
+    }
+    setAnalyzing(false);
   }
 
-  function dispatch() {
+  async function dispatch() {
     if (!result || !ranked.length) return;
+    setDispatching(true);
     const top = ranked[0];
-    createRequest({
+    const created = await createRequest({
       patientText: text, score: result.score, category: result.category, crisisTypeAI: result.type,
       confirmedType: null, ambulance: result.ambulance, hospitalId: top.id, hospitalName: top.name, eta: top.eta,
     });
-    setMyRequestId(`r${requests.length + 1}`);
+    setMyRequestId(created.id);
+    setDispatching(false);
   }
 
   return (
@@ -351,9 +459,9 @@ function PatientView({ hospitals, requests, createRequest }) {
               <Mic size={14} className={listening ? "pulse-dot" : ""} color={listening ? C.red : "var(--text)"} />
               {listening ? "Listening…" : "Speak symptoms"}
             </button>
-            <button onClick={analyze} disabled={!text.trim() || listening}
+            <button onClick={analyze} disabled={!text.trim() || listening || analyzing}
               className="px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-40" style={{ background: "var(--accentBg)", color: "var(--accentText)" }}>
-              Analyze severity
+              {analyzing ? "Analyzing…" : "Analyze severity"}
             </button>
           </div>
           <p className="text-[10px] font-mono text-[var(--muted)] mt-1.5">Voice capture shown here is a mock for the demo — production wires this to the Web Speech API, transcribed and scored by GPT/Gemini on the backend.</p>
@@ -369,6 +477,7 @@ function PatientView({ hospitals, requests, createRequest }) {
                 <div className="font-display font-semibold text-sm" style={{ color: CATEGORY_COLOR[result.category] }}>{result.category}</div>
                 <div className="text-xs text-[var(--muted)] flex items-center gap-1">
                   {React.createElement(CRISIS_ICON[result.type], { size: 12 })} {result.type} case
+                  <span className="text-[10px] font-mono ml-1">· {resultSource === "backend" ? "scored by backend_server.js" : "scored locally (backend offline)"}</span>
                 </div>
               </div>
             </div>
@@ -402,11 +511,16 @@ function PatientView({ hospitals, requests, createRequest }) {
 
       {result && !myRequest && (
         <section>
-          <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
             <h2 className="font-display font-semibold text-base">Ranked hospitals for {result.type}</h2>
-            <button onClick={() => setShowFormula((s) => !s)} className="text-[11px] font-mono text-[var(--muted)] underline">
-              {showFormula ? "hide" : "how we ranked these"}
-            </button>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-mono text-[var(--muted)]">
+                {rankSource === "backend" ? "from backend_server.js" : "local fallback — backend offline"}
+              </span>
+              <button onClick={() => setShowFormula((s) => !s)} className="text-[11px] font-mono text-[var(--muted)] underline">
+                {showFormula ? "hide" : "how we ranked these"}
+              </button>
+            </div>
           </div>
           {showFormula && (
             <div className="text-[11px] font-mono text-[var(--text)] bg-[var(--pill)] rounded-lg p-3 mb-3 leading-relaxed">
@@ -417,10 +531,10 @@ function PatientView({ hospitals, requests, createRequest }) {
           <div className="space-y-2.5">
             {ranked.map((h, i) => <RankedHospitalCard key={h.id} h={h} rank={i + 1} />)}
           </div>
-          <button onClick={dispatch} className="mt-4 w-full sm:w-auto px-5 py-2.5 rounded-lg text-sm font-medium flex items-center justify-center gap-2"
+          <button onClick={dispatch} disabled={dispatching} className="mt-4 w-full sm:w-auto px-5 py-2.5 rounded-lg text-sm font-medium flex items-center justify-center gap-2 disabled:opacity-60"
             style={{ background: result.ambulance ? C.red : "var(--accentBg)", color: result.ambulance ? "#fff" : "var(--accentText)" }}>
             {result.ambulance ? <AmbulanceIcon size={15} /> : <Navigation2 size={15} />}
-            {result.ambulance ? `Confirm & dispatch ambulance to ${ranked[0]?.name}` : `Get directions to ${ranked[0]?.name}`}
+            {dispatching ? "Sending…" : result.ambulance ? `Confirm & dispatch ambulance to ${ranked[0]?.name}` : `Get directions to ${ranked[0]?.name}`}
           </button>
         </section>
       )}

@@ -1,0 +1,177 @@
+[
+    {
+        "id": "h1",
+        "name": "Vantage Trauma Center",
+        "distanceKm": 3.1,
+        "baseEta": 9,
+        "trafficX": 1.15,
+        "stock": {
+            "icu": 2,
+            "bloodNeg": 4,
+            "ventilator": 1,
+            "trauma": 3,
+            "burn": 0,
+            "incubator": 1
+        },
+        "freshness": {
+            "icu": 2,
+            "bloodNeg": 6,
+            "ventilator": 2,
+            "trauma": 1,
+            "burn": 40,
+            "incubator": 9
+        },
+        "capability": {
+            "Cardiac": 70,
+            "Trauma": 92,
+            "Respiratory": 65,
+            "Burn": 40,
+            "Obstetric": 50,
+            "Neurological": 60,
+            "Mass Casualty": 88,
+            "General": 70
+        },
+        "currentCrisisType": "Trauma",
+        "crisisModeLocal": false
+    },
+    {
+        "id": "h2",
+        "name": "Sunrise Multispecialty",
+        "distanceKm": 5.6,
+        "baseEta": 14,
+        "trafficX": 1.3,
+        "stock": {
+            "icu": 0,
+            "bloodNeg": 1,
+            "ventilator": 0,
+            "trauma": 1,
+            "burn": 2,
+            "incubator": 0
+        },
+        "freshness": {
+            "icu": 33,
+            "bloodNeg": 12,
+            "ventilator": 51,
+            "trauma": 4,
+            "burn": 3,
+            "incubator": 22
+        },
+        "capability": {
+            "Cardiac": 55,
+            "Trauma": 45,
+            "Respiratory": 60,
+            "Burn": 75,
+            "Obstetric": 65,
+            "Neurological": 50,
+            "Mass Casualty": 40,
+            "General": 60
+        },
+        "currentCrisisType": "Burn",
+        "crisisModeLocal": false
+    },
+    {
+        "id": "h3",
+        "name": "Ashirwad General Hospital",
+        "distanceKm": 2.2,
+        "baseEta": 6,
+        "trafficX": 1.05,
+        "stock": {
+            "icu": 5,
+            "bloodNeg": 0,
+            "ventilator": 3,
+            "trauma": 2,
+            "burn": 1,
+            "incubator": 2
+        },
+        "freshness": {
+            "icu": 1,
+            "bloodNeg": 58,
+            "ventilator": 5,
+            "trauma": 1,
+            "burn": 15,
+            "incubator": 2
+        },
+        "capability": {
+            "Cardiac": 85,
+            "Trauma": 60,
+            "Respiratory": 80,
+            "Burn": 45,
+            "Obstetric": 70,
+            "Neurological": 75,
+            "Mass Casualty": 55,
+            "General": 80
+        },
+        "currentCrisisType": "General",
+        "crisisModeLocal": false
+    },
+    {
+        "id": "h4",
+        "name": "Green Valley Medical",
+        "distanceKm": 8.9,
+        "baseEta": 21,
+        "trafficX": 1.4,
+        "stock": {
+            "icu": 3,
+            "bloodNeg": 2,
+            "ventilator": 2,
+            "trauma": 0,
+            "burn": 0,
+            "incubator": 3
+        },
+        "freshness": {
+            "icu": 7,
+            "bloodNeg": 3,
+            "ventilator": 19,
+            "trauma": 60,
+            "burn": 60,
+            "incubator": 4
+        },
+        "capability": {
+            "Cardiac": 60,
+            "Trauma": 40,
+            "Respiratory": 55,
+            "Burn": 35,
+            "Obstetric": 88,
+            "Neurological": 55,
+            "Mass Casualty": 45,
+            "General": 65
+        },
+        "currentCrisisType": "Obstetric",
+        "crisisModeLocal": false
+    },
+    {
+        "id": "h5",
+        "name": "Kaveri District Hospital",
+        "distanceKm": 4.4,
+        "baseEta": 11,
+        "trafficX": 1.1,
+        "stock": {
+            "icu": 1,
+            "bloodNeg": 0,
+            "ventilator": 1,
+            "trauma": 2,
+            "burn": 3,
+            "incubator": 0
+        },
+        "freshness": {
+            "icu": 4,
+            "bloodNeg": 45,
+            "ventilator": 8,
+            "trauma": 2,
+            "burn": 6,
+            "incubator": 30
+        },
+        "capability": {
+            "Cardiac": 50,
+            "Trauma": 65,
+            "Respiratory": 60,
+            "Burn": 80,
+            "Obstetric": 55,
+            "Neurological": 45,
+            "Mass Casualty": 60,
+            "General": 60
+        },
+        "currentCrisisType": "Burn",
+        "crisisModeLocal": false
+    }
+]

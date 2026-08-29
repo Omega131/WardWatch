@@ -97,6 +97,14 @@ app.post("/api/triage", async (req, res) => {
 // GET /api/hospitals/rank?crisisType=Trauma&lat=..&lng=..
 // -> ranked hospital list using resource + traffic-aware ETA + capability
 // ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
+// GET /api/hospitals  -> full unranked list, used by the frontend on load
+// to sync its local state with whatever the backend currently holds.
+// ---------------------------------------------------------------------
+app.get("/api/hospitals", (req, res) => {
+    res.json(hospitals);
+});
+
 app.get("/api/hospitals/rank", async (req, res) => {
     const { crisisType = "General" /*, lat, lng */ } = req.query;
     const resourceKey = CRISIS_RESOURCE[crisisType] || "icu";
@@ -172,6 +180,13 @@ app.get("/api/government/overview", (req, res) => {
         })),
     });
 });
+
+// ---------------------------------------------------------------------
+// GET /api/health  -> cheap ping the frontend uses to show a connected/
+// offline badge, and GET /api/dispatch to sync the full requests list.
+// ---------------------------------------------------------------------
+app.get("/api/health", (req, res) => res.json({ ok: true }));
+app.get("/api/dispatch", (req, res) => res.json(requests));
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`WardWatch backend listening on :${PORT}`));
