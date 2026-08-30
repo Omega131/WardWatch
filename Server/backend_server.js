@@ -3,30 +3,28 @@
  * -----------------------------------------------------------------------
  * This is a starting point for the real Node/Express service behind the
  * prototype, matching the architecture already on your pitch deck
- * (React front end, Node/Express + Firebase, OpenAI/Gemini, Google Maps).
+ * (React front end, Node/Express + Firebase, Gemini, Google Maps).
  *
- * It is NOT wired to live APIs — this sandbox has no network access — but
- * every endpoint mirrors the logic simulated in wardwatch_prototype.jsx,
- * so swapping in real keys is mostly a matter of filling in the two
- * marked TODOs.
+ *   npm i express cors dotenv firebase-admin @googlemaps/google-maps-services-js
+ *   (Node 18+ has fetch built in — no extra package needed for Gemini itself)
  *
- *   npm i express cors firebase-admin openai @googlemaps/google-maps-services-js
+ *   Create a .env file next to this one containing:
+ *     GEMINI_API_KEY=your_key_here
+ *
  *   node backend_server.js
  * -----------------------------------------------------------------------
  */
 
+require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 // const admin = require("firebase-admin");         // real-time inventory DB
-// const { OpenAI } = require("openai");             // AI triage
 // const { Client } = require("@googlemaps/google-maps-services-js"); // ETA/traffic
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-// const mapsClient = new Client({});
 // admin.initializeApp({ credential: admin.credential.applicationDefault() });
 // const db = admin.database();
 
@@ -36,9 +34,27 @@ app.use(express.json());
 const hospitals = require("./mock_hospitals.json"); // same shape as HOSPITALS_INIT in the frontend
 let requests = [];
 
+const CRISIS_TYPES = ["Cardiac", "Trauma", "Respiratory", "Burn", "Obstetric", "Neurological", "Mass Casualty", "General"];
+const RESOURCE_LABELS = ["ICU Bed", "O- Blood", "Ventilator", "Trauma Bay", "Burn Unit", "Infant Incubator"];
 const CRISIS_RESOURCE = {
     Cardiac: "icu", Trauma: "trauma", Respiratory: "ventilator", Burn: "burn",
     Obstetric: "incubator", Neurological: "icu", "Mass Casualty": "trauma", General: "icu",
+};
+const RESOURCE_KEY_TO_LABEL = { icu: "ICU Bed", bloodNeg: "O- Blood", ventilator: "Ventilator", trauma: "Trauma Bay", burn: "Burn Unit", incubator: "Infant Incubator" };
+const SPECIALIST_BY_TYPE = {
+    Cardiac: ["Cardiologist"], Trauma: ["Trauma Surgeon"], Respiratory: ["Pulmonologist"],
+    Burn: ["Burn Specialist"], Obstetric: ["Obstetrician"], Neurological: ["Neurologist"],
+    "Mass Casualty": ["Emergency Medicine Physician"], General: ["General Physician"],
+};
+const FIRST_AID_BY_TYPE = {
+    Cardiac: ["Keep the person calm and seated upright", "Loosen tight clothing", "Be ready to start CPR if they stop responding", "Do not give food or water"],
+    Trauma: ["Apply firm, direct pressure to any bleeding wound", "Do not remove embedded objects", "Keep the person still", "Elevate the injured area if possible"],
+    Respiratory: ["Help them into an upright, comfortable position", "Loosen clothing around the neck and chest", "Stay with them until help arrives"],
+    Burn: ["Cool the burn under running water for 20 minutes", "Do not apply ice, butter, or ointments", "Cover loosely with a clean, non-stick cloth"],
+    Obstetric: ["Help them lie on their left side if possible", "Time contractions if in labor", "Keep them warm and calm"],
+    Neurological: ["Clear the area of anything that could cause injury", "Do not restrain a seizing person", "Turn them on their side once it ends"],
+    "Mass Casualty": ["Prioritize the most severe, treatable injuries first", "Keep patients grouped by severity if possible"],
+    General: ["Keep the person comfortable and hydrated if conscious", "Monitor for worsening symptoms"],
 };
 
 const KEYWORDS = [
@@ -56,27 +72,78 @@ const KEYWORDS = [
 ];
 
 // ---------------------------------------------------------------------
-// POST /api/triage  { text }  ->  { score, category, type, ambulance }
+// Gemini call. Uses a plain REST fetch (Node 18+ has fetch built in) so
+// there's no extra SDK version to keep in sync — just an API key.
+// Get a free key at https://aistudio.google.com/apikey
 // ---------------------------------------------------------------------
-app.post("/api/triage", async (req, res) => {
-    const { text } = req.body;
-    if (!text) return res.status(400).json({ error: "text is required" });
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_MODEL = "gemini-3.6-flash"; // gemini-2.0-flash was retired — this is Google's current stable Flash model
 
-    // TODO (real AI call): replace the keyword scan below with a structured
-    // OpenAI/Gemini call, e.g.:
-    //
-    // const completion = await openai.chat.completions.create({
-    //   model: "gpt-4o-mini",
-    //   response_format: { type: "json_object" },
-    //   messages: [
-    //     { role: "system", content: "You are an emergency triage classifier. " +
-    //       "Given a patient description, return JSON: {score: 0-100, type: one of " +
-    //       "[Cardiac,Trauma,Respiratory,Burn,Obstetric,Neurological,Mass Casualty,General]}." },
-    //     { role: "user", content: text },
-    //   ],
-    // });
-    // const ai = JSON.parse(completion.choices[0].message.content);
+const TRIAGE_SCHEMA_PROMPT = `You are an emergency medical triage assistant helping a 108-style dispatch platform. A caller has described the following situation:
 
+"""{{TEXT}}"""
+
+Respond with ONLY a JSON object (no markdown fences, no extra commentary) with exactly this shape:
+{
+  "score": <integer 0-100, overall severity>,
+  "category": <"Critical" | "Urgent" | "Stable">,
+  "type": <one of ${JSON.stringify(CRISIS_TYPES)}>,
+  "ambulance": <true or false>,
+  "resources": [<0-3 items, chosen only from ${JSON.stringify(RESOURCE_LABELS)}>],
+  "specialists": [<0-2 relevant specialist doctor types, e.g. "Cardiologist", "Trauma Surgeon", "Pulmonologist", "Neurologist", "Obstetrician", "Burn Specialist", "General Physician">],
+  "firstAid": [<3-5 short, plain-language immediate first aid steps a bystander with no medical training can follow right now, each under 15 words>]
+}
+
+Rules:
+- score >= 70 means Critical, 35-69 Urgent, below 35 Stable — category MUST match score.
+- ambulance MUST be true whenever score >= 55, false otherwise.
+- Base every field strictly on what was actually described — don't invent symptoms.
+- If the description is vague or clearly not a medical emergency, use score 0-10, category "Stable", type "General".`;
+
+async function callGeminiTriage(text) {
+    if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not set");
+
+    const prompt = TRIAGE_SCHEMA_PROMPT.replace("{{TEXT}}", text);
+
+    const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: { responseMimeType: "application/json", temperature: 0.2 },
+            }),
+        }
+    );
+
+    if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        throw new Error(`Gemini API responded ${res.status}: ${errText.slice(0, 300)}`);
+    }
+
+    const data = await res.json();
+    const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!raw) throw new Error("Gemini returned no usable content (possibly blocked by safety filters)");
+
+    const parsed = JSON.parse(raw); // throws if Gemini didn't return valid JSON — caught by the route below
+
+    // Belt-and-braces validation — never trust an LLM's output blindly for
+    // something that gates an ambulance dispatch.
+    if (typeof parsed.score !== "number" || !CRISIS_TYPES.includes(parsed.type)) {
+        throw new Error("Gemini response failed shape validation");
+    }
+    parsed.score = Math.max(0, Math.min(100, Math.round(parsed.score)));
+    parsed.category = parsed.score >= 70 ? "Critical" : parsed.score >= 35 ? "Urgent" : "Stable";
+    parsed.ambulance = parsed.score >= 55; // recomputed server-side — the cutoff is not the model's call to make
+    parsed.resources = Array.isArray(parsed.resources) ? parsed.resources.filter((r) => RESOURCE_LABELS.includes(r)) : [];
+    parsed.specialists = Array.isArray(parsed.specialists) ? parsed.specialists.slice(0, 3) : [];
+    parsed.firstAid = Array.isArray(parsed.firstAid) ? parsed.firstAid.slice(0, 5) : [];
+
+    return parsed;
+}
+
+function keywordFallbackTriage(text) {
     let score = 0, bestType = "General", bestWeight = 0;
     const t = text.toLowerCase();
     KEYWORDS.forEach((k) => {
@@ -86,11 +153,31 @@ app.post("/api/triage", async (req, res) => {
         }
     });
     score = Math.min(100, score);
-
     const category = score >= 70 ? "Critical" : score >= 35 ? "Urgent" : "Stable";
-    const ambulance = score >= 55; // single cutoff integer gating dispatch, per spec
+    const ambulance = score >= 55;
+    return {
+        score, category, type: bestType, ambulance,
+        resources: [RESOURCE_KEY_TO_LABEL[CRISIS_RESOURCE[bestType]]],
+        specialists: SPECIALIST_BY_TYPE[bestType],
+        firstAid: FIRST_AID_BY_TYPE[bestType],
+    };
+}
 
-    res.json({ score, category, type: bestType, ambulance });
+// ---------------------------------------------------------------------
+// POST /api/triage  { text }  ->  { score, category, type, ambulance,
+//                                   resources, specialists, firstAid, source }
+// ---------------------------------------------------------------------
+app.post("/api/triage", async (req, res) => {
+    const { text } = req.body;
+    if (!text) return res.status(400).json({ error: "text is required" });
+
+    try {
+        const ai = await callGeminiTriage(text);
+        return res.json({ ...ai, source: "gemini" });
+    } catch (err) {
+        console.error("[triage] Gemini call failed, using keyword fallback:", err.message);
+        return res.json({ ...keywordFallbackTriage(text), source: "keyword-fallback" });
+    }
 });
 
 // ---------------------------------------------------------------------

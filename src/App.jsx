@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Siren, HeartPulse, Building2, MapPin, Navigation2, Phone, Clock,
   Plus, Minus, AlertTriangle, CheckCircle2, Users, Zap, Droplet,
@@ -136,6 +136,12 @@ const FIRST_AID = {
   General: ["Keep the person comfortable and hydrated if conscious", "Monitor for worsening symptoms", "Note when symptoms started for the hospital team"],
 };
 
+const SPECIALIST_BY_TYPE = {
+  Cardiac: ["Cardiologist"], Trauma: ["Trauma Surgeon"], Respiratory: ["Pulmonologist"],
+  Burn: ["Burn Specialist"], Obstetric: ["Obstetrician"], Neurological: ["Neurologist"],
+  "Mass Casualty": ["Emergency Medicine Physician"], General: ["General Physician"],
+};
+
 const SAMPLE_TRANSCRIPTS = [
   "My father is clutching his chest and says he has severe chest pain and is sweating a lot.",
   "My son fell off his bike, there's severe bleeding from his leg and a possible fracture.",
@@ -157,9 +163,15 @@ function analyzeSeverity(text) {
     }
   });
   score = Math.min(100, score);
+  const type = matched.length ? bestType : "General";
   const category = score >= 70 ? "Critical" : score >= 35 ? "Urgent" : "Stable";
   const ambulance = score >= 55; // single cutoff integer that gates ambulance dispatch
-  return { score, category, type: matched.length ? bestType : "General", matched, ambulance };
+  return {
+    score, category, type, matched, ambulance,
+    resources: [RESOURCES.find((r) => r.key === CRISIS_RESOURCE[type])?.label].filter(Boolean),
+    specialists: SPECIALIST_BY_TYPE[type],
+    firstAid: FIRST_AID[type],
+  };
 }
 
 const CATEGORY_COLOR = { Critical: C.red, Urgent: C.amber, Stable: C.green };
@@ -376,6 +388,9 @@ export default function App() {
 function PatientView({ hospitals, requests, createRequest, backendOnline }) {
   const [text, setText] = useState("");
   const [listening, setListening] = useState(false);
+  const [voiceError, setVoiceError] = useState(null);
+  const recognitionRef = useRef(null);
+  const speechSupported = typeof window !== "undefined" && (window.SpeechRecognition || window.webkitSpeechRecognition);
   const [result, setResult] = useState(null);
   const [resultSource, setResultSource] = useState(null); // "backend" | "local"
   const [ranked, setRanked] = useState([]);
@@ -388,12 +403,57 @@ function PatientView({ hospitals, requests, createRequest, backendOnline }) {
   const myRequest = requests.find((r) => r.id === myRequestId);
 
   function startVoice() {
-    setListening(true);
-    setTimeout(() => {
-      setText(SAMPLE_TRANSCRIPTS[Math.floor(Math.random() * SAMPLE_TRANSCRIPTS.length)]);
-      setListening(false);
-    }, 1400);
+    setVoiceError(null);
+
+    // No real speech recognition in this browser (e.g. Firefox, or non-HTTPS
+    // context) — fall back to the scripted demo transcript so the flow still
+    // works for a live demo.
+    const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognitionAPI) {
+      setListening(true);
+      setTimeout(() => {
+        setText(SAMPLE_TRANSCRIPTS[Math.floor(Math.random() * SAMPLE_TRANSCRIPTS.length)]);
+        setListening(false);
+      }, 1400);
+      return;
+    }
+
+    // If already listening, treat a second click as "stop."
+    if (listening && recognitionRef.current) {
+      recognitionRef.current.stop();
+      return;
+    }
+
+    const recognition = new SpeechRecognitionAPI();
+    recognition.lang = "en-IN";
+    recognition.interimResults = true; // show words as they're recognized, not just at the end
+    recognition.continuous = false;    // stop automatically after one pause in speech
+
+    recognition.onstart = () => setListening(true);
+
+    recognition.onresult = (e) => {
+      let transcript = "";
+      for (let i = 0; i < e.results.length; i++) transcript += e.results[i][0].transcript;
+      setText(transcript);
+    };
+
+    recognition.onerror = (e) => {
+      // "not-allowed" = mic permission denied, "no-speech" = silence timeout, etc.
+      setVoiceError(
+        e.error === "not-allowed" ? "Microphone permission was denied — allow mic access in your browser and try again."
+          : e.error === "no-speech" ? "Didn't catch any speech — try again."
+            : `Voice recognition error: ${e.error}`
+      );
+    };
+
+    recognition.onend = () => setListening(false);
+
+    recognitionRef.current = recognition;
+    recognition.start();
   }
+
+  // Stop any in-progress recognition if the component unmounts mid-listen.
+  useEffect(() => () => recognitionRef.current?.stop(), []);
 
   async function analyze() {
     if (!text.trim()) return;
@@ -408,7 +468,9 @@ function PatientView({ hospitals, requests, createRequest, backendOnline }) {
       });
       if (!res.ok) throw new Error();
       severity = await res.json();
-      setResultSource("backend");
+      // The backend itself reports "gemini" or "keyword-fallback" in its
+      // response — surface that distinction rather than just "reached the backend."
+      setResultSource(severity.source === "gemini" ? "gemini" : "backend-fallback");
     } catch {
       severity = analyzeSeverity(text); // local fallback, identical formula
       setResultSource("local");
@@ -454,17 +516,22 @@ function PatientView({ hospitals, requests, createRequest, backendOnline }) {
             className="w-full h-24 resize-none outline-none text-sm placeholder:text-[var(--muted)]"
           />
           <div className="flex items-center justify-between mt-2">
-            <button onClick={startVoice} disabled={listening}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium border border-[var(--border)] hover:bg-[var(--pillHover)] disabled:opacity-60">
+            <button onClick={startVoice}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium border border-[var(--border)] hover:bg-[var(--pillHover)]">
               <Mic size={14} className={listening ? "pulse-dot" : ""} color={listening ? C.red : "var(--text)"} />
-              {listening ? "Listening…" : "Speak symptoms"}
+              {listening ? (speechSupported ? "Listening… (tap to stop)" : "Listening…") : "Speak symptoms"}
             </button>
             <button onClick={analyze} disabled={!text.trim() || listening || analyzing}
               className="px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-40" style={{ background: "var(--accentBg)", color: "var(--accentText)" }}>
               {analyzing ? "Analyzing…" : "Analyze severity"}
             </button>
           </div>
-          <p className="text-[10px] font-mono text-[var(--muted)] mt-1.5">Voice capture shown here is a mock for the demo — production wires this to the Web Speech API, transcribed and scored by GPT/Gemini on the backend.</p>
+          {voiceError && <p className="text-[11px] mt-1.5" style={{ color: C.red }}>{voiceError}</p>}
+          <p className="text-[10px] font-mono text-[var(--muted)] mt-1.5">
+            {speechSupported
+              ? "Real voice recognition via your browser's Web Speech API — needs mic permission and works best in Chrome/Edge."
+              : "Your browser doesn't support live voice recognition (Web Speech API) — using a scripted demo transcript instead. Try Chrome or Edge for real mic input."}
+          </p>
         </div>
       </section>
 
@@ -477,7 +544,9 @@ function PatientView({ hospitals, requests, createRequest, backendOnline }) {
                 <div className="font-display font-semibold text-sm" style={{ color: CATEGORY_COLOR[result.category] }}>{result.category}</div>
                 <div className="text-xs text-[var(--muted)] flex items-center gap-1">
                   {React.createElement(CRISIS_ICON[result.type], { size: 12 })} {result.type} case
-                  <span className="text-[10px] font-mono ml-1">· {resultSource === "backend" ? "scored by backend_server.js" : "scored locally (backend offline)"}</span>
+                  <span className="text-[10px] font-mono ml-1">
+                    · {resultSource === "gemini" ? "scored by Gemini" : resultSource === "backend-fallback" ? "backend online, keyword fallback used" : "scored locally (backend offline)"}
+                  </span>
                 </div>
               </div>
             </div>
@@ -499,10 +568,29 @@ function PatientView({ hospitals, requests, createRequest, backendOnline }) {
             ))}
           </div>
 
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <div className="text-xs font-semibold text-[var(--text)] mb-1.5">Resources needed</div>
+              <div className="flex flex-wrap gap-1.5">
+                {(result.resources?.length ? result.resources : ["—"]).map((r) => (
+                  <span key={r} className="text-[11px] px-2 py-1 rounded-full bg-[var(--pill)] text-[var(--text)]">{r}</span>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs font-semibold text-[var(--text)] mb-1.5">Specialists to alert</div>
+              <div className="flex flex-wrap gap-1.5">
+                {(result.specialists?.length ? result.specialists : ["—"]).map((s) => (
+                  <span key={s} className="text-[11px] px-2 py-1 rounded-full bg-[var(--pill)] text-[var(--text)]">{s}</span>
+                ))}
+              </div>
+            </div>
+          </div>
+
           <div>
             <div className="text-xs font-semibold text-[var(--text)] mb-1.5">Immediate first aid — {result.type}</div>
             <ul className="text-xs text-[var(--text)] space-y-1 list-disc list-inside">
-              {FIRST_AID[result.type].map((tip) => <li key={tip}>{tip}</li>)}
+              {(result.firstAid?.length ? result.firstAid : FIRST_AID[result.type]).map((tip) => <li key={tip}>{tip}</li>)}
             </ul>
             <p className="text-[10px] text-[var(--muted)] mt-1.5">This is general guidance, not a diagnosis. Follow instructions from emergency responders once they arrive.</p>
           </div>
