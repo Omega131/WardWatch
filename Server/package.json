@@ -17,6 +17,8 @@
     "firebase-admin": "^14.3.0"
   },
   "allowScripts": {
-    "firebase-admin@14.3.0": true
+    "firebase-admin@14.3.0": true,
+    "@firebase/util@1.15.3": true,
+    "protobufjs@7.6.6": true
   }
 }
