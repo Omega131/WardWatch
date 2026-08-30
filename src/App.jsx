@@ -230,6 +230,7 @@ export default function App() {
 
   const [userLocation, setUserLocation] = useState(null);
   const [scanning, setScanning] = useState(false);
+  const [authHospitalId, setAuthHospitalId] = useState(null);
 
   useEffect(() => {
     if ("geolocation" in navigator) {
@@ -355,6 +356,8 @@ export default function App() {
     if (userLocation && h.lat && h.lng) {
       const url = `/directions?uLat=${userLocation.lat}&uLng=${userLocation.lng}&hLat=${h.lat}&hLng=${h.lng}&name=${encodeURIComponent(h.name)}`;
       window.open(url, "_blank");
+    } else {
+      alert("Location data is missing. Please ensure location services are enabled.");
     }
   };
 
@@ -490,13 +493,6 @@ export default function App() {
             <span className="hidden sm:inline text-xs font-mono text-[var(--muted)] ml-1">every second matters</span>
           </div>
           <div className="flex items-center gap-2">
-            <span
-              title={backendOnline ? "backend_server.js is reachable at :4000" : "Backend not reachable — running on local mock data"}
-              className="hidden sm:flex items-center gap-1.5 text-[10px] font-mono text-[var(--muted)] px-2 py-1 rounded-full bg-[var(--pill)]"
-            >
-              <span className="w-1.5 h-1.5 rounded-full" style={{ background: backendOnline ? C.green : backendOnline === false ? C.red : C.amber }} />
-              {backendOnline ? "backend online" : backendOnline === false ? "backend offline" : "checking…"}
-            </span>
             <div className="flex items-center gap-1 bg-[var(--pill)] rounded-full p-1">
               {tabs.map((t) => {
                 const Icon = t.icon;
@@ -526,11 +522,15 @@ export default function App() {
       </header>
 
       <main className="max-w-6xl mx-auto px-5 py-6">
-        {mode === "patient" && <PatientView hospitals={hospitals} requests={requests} createRequest={createRequest} backendOnline={backendOnline} onGetDirections={handleGetDirections} scanning={scanning} />}
-        {mode === "hospital" && (
+        {mode === "patient" && <PatientView hospitals={hospitals} requests={requests} createRequest={createRequest} backendOnline={backendOnline} onGetDirections={handleGetDirections} scanning={scanning} userLocation={userLocation} />}
+        {mode === "hospital" && !authHospitalId && (
+          <HospitalAuth hospitals={hospitals} onLogin={(id) => setAuthHospitalId(id)} />
+        )}
+        {mode === "hospital" && authHospitalId && (
           <HospitalView hospitals={hospitals} requests={requests} adjustStock={adjustStock}
             toggleHospitalSpecialty={toggleHospitalSpecialty} updateRequestCrisisType={updateRequestCrisisType}
-            globalCrisis={globalCrisis} setGlobalCrisis={setGlobalCrisis} />
+            globalCrisis={globalCrisis} setGlobalCrisis={setGlobalCrisis} authHospitalId={authHospitalId}
+            onLogout={() => setAuthHospitalId(null)} />
         )}
         {mode === "ambulance" && <AmbulanceView requests={requests} hospitals={hospitals} advanceRequest={advanceRequest} onGetDirections={handleGetDirections} />}
         {mode === "government" && <GovernmentView hospitals={hospitals} requests={requests} />}
@@ -543,7 +543,7 @@ export default function App() {
 // ---------------------------------------------------------------------------
 // PATIENT VIEW — voice/text intake -> AI severity -> ranked hospitals -> dispatch
 // ---------------------------------------------------------------------------
-function PatientView({ hospitals, requests, createRequest, backendOnline, onGetDirections, scanning }) {
+function PatientView({ hospitals, requests, createRequest, backendOnline, onGetDirections, scanning, userLocation }) {
   const [text, setText] = useState("");
   const [listening, setListening] = useState(false);
   const [voiceError, setVoiceError] = useState(null);
@@ -656,6 +656,8 @@ function PatientView({ hospitals, requests, createRequest, backendOnline, onGetD
     const created = await createRequest({
       patientText: text, score: result.score, category: result.category, crisisTypeAI: result.types[0],
       confirmedType: null, ambulance: result.ambulance, hospitalId: top.id, hospitalName: top.name, eta: top.eta,
+      patientLat: userLocation?.lat, patientLng: userLocation?.lng,
+      hospitalLat: top.lat, hospitalLng: top.lng,
     });
     setMyRequestId(created.id);
     setDispatching(false);
@@ -860,31 +862,104 @@ function TrackingCard({ request }) {
 }
 
 // ---------------------------------------------------------------------------
+// HOSPITAL AUTHENTICATION
+// ---------------------------------------------------------------------------
+function HospitalAuth({ hospitals, onLogin }) {
+  const [isLogin, setIsLogin] = useState(true);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [hospitalId, setHospitalId] = useState(hospitals[0]?.id || '');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    
+    const endpoint = isLogin ? '/api/auth/login' : '/api/auth/signup';
+    const body = { email, password };
+    if (!isLogin) body.hospitalId = hospitalId;
+    
+    try {
+      const res = await fetch(`${API_BASE}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      
+      if (!res.ok) throw new Error(data.error || 'Authentication failed');
+      
+      onLogin(data.hospitalId);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="max-w-md mx-auto mt-10 p-6 bg-[var(--surface)] border border-[var(--border)] rounded-xl shadow-sm">
+      <div className="flex justify-center mb-4">
+        <div className="p-3 bg-[var(--accentBg)] rounded-full text-[var(--accentText)]">
+          <Building2 size={24} />
+        </div>
+      </div>
+      <h2 className="text-xl font-bold font-display mb-6 text-center">{isLogin ? 'Hospital Portal Login' : 'Hospital Portal Registration'}</h2>
+      
+      {error && <div className="p-3 mb-4 text-sm text-red-500 bg-red-500/10 border border-red-500/20 rounded-lg">{error}</div>}
+      
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="block text-xs font-semibold mb-1 text-[var(--muted)]">Email Address</label>
+          <input type="email" required value={email} onChange={e => setEmail(e.target.value)} className="w-full p-2 text-sm bg-[var(--bg)] border border-[var(--border)] rounded-lg outline-none focus:border-[var(--accentBg)] transition-colors" />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold mb-1 text-[var(--muted)]">Password</label>
+          <input type="password" required value={password} onChange={e => setPassword(e.target.value)} className="w-full p-2 text-sm bg-[var(--bg)] border border-[var(--border)] rounded-lg outline-none focus:border-[var(--accentBg)] transition-colors" />
+        </div>
+        {!isLogin && (
+          <div>
+            <label className="block text-xs font-semibold mb-1 text-[var(--muted)]">Claim Hospital Profile</label>
+            <select value={hospitalId} onChange={e => setHospitalId(e.target.value)} className="w-full p-2 text-sm bg-[var(--bg)] border border-[var(--border)] rounded-lg outline-none focus:border-[var(--accentBg)] transition-colors">
+              {hospitals.map(h => <option key={h.id} value={h.id}>{h.name}</option>)}
+            </select>
+          </div>
+        )}
+        <button disabled={loading} type="submit" className="w-full py-2.5 bg-[var(--text)] text-[var(--bg)] rounded-lg font-semibold hover:opacity-90 transition-opacity mt-2">
+          {loading ? 'Processing...' : (isLogin ? 'Login to Portal' : 'Register Account')}
+        </button>
+      </form>
+      <div className="mt-5 text-center">
+        <button onClick={() => { setIsLogin(!isLogin); setError(''); }} type="button" className="text-xs text-[var(--muted)] hover:text-[var(--text)] transition-colors">
+          {isLogin ? 'New hospital? Register here' : 'Already registered? Login here'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // HOSPITAL VIEW
 // ---------------------------------------------------------------------------
-function HospitalView({ hospitals, requests, adjustStock, toggleHospitalSpecialty, updateRequestCrisisType, globalCrisis, setGlobalCrisis }) {
-  const [hospitalId, setHospitalId] = useState(hospitals[0].id);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const hospital = hospitals.find((h) => h.id === hospitalId);
+function HospitalView({ hospitals, requests, adjustStock, toggleHospitalSpecialty, updateRequestCrisisType, globalCrisis, setGlobalCrisis, authHospitalId, onLogout }) {
+  const hospital = hospitals.find((h) => h.id === authHospitalId) || hospitals[0];
+  const hospitalId = hospital.id;
   const incoming = requests.filter((r) => r.hospitalId === hospitalId);
   const specialties = hospital.specialties || [];
 
   return (
     <div className="space-y-5">
       <section className="flex flex-wrap items-center justify-between gap-3">
-        <div className="relative">
-          <button onClick={() => setPickerOpen((o) => !o)} className="flex items-center gap-2 pl-3 pr-2.5 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface)]">
-            <Building2 size={15} className="text-[var(--muted)]" />
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 pl-3 pr-4 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-sm">
+            <Building2 size={15} className="text-[var(--accentBg)]" />
             <span className="font-display font-semibold text-sm">{hospital.name}</span>
-            <ChevronDown size={14} className="text-[var(--muted)]" />
+          </div>
+          <button onClick={onLogout} className="text-xs font-semibold px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--muted)] hover:text-[var(--text)] transition-colors">
+            Logout
           </button>
-          {pickerOpen && (
-            <div className="absolute z-10 mt-1 w-64 rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-lg overflow-hidden">
-              {hospitals.map((h) => (
-                <button key={h.id} onClick={() => { setHospitalId(h.id); setPickerOpen(false); }} className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--pillHover)]">{h.name}</button>
-              ))}
-            </div>
-          )}
         </div>
         <button onClick={() => setGlobalCrisis((c) => !c)}
           className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm ${globalCrisis ? "bg-[#E4572E] text-white crisis-ring" : "bg-[var(--surface)] border border-[var(--border)] text-[var(--text)]"}`}>
@@ -1006,8 +1081,16 @@ function AmbulanceView({ requests, hospitals, advanceRequest, onGetDirections })
             </div>
             <div className="flex items-center gap-2">
               <button onClick={() => {
-                const h = hospitals.find(h => h.id === r.hospitalId);
-                if (h) onGetDirections(h);
+                let h = hospitals.find(h => h.id === r.hospitalId);
+                if (!h) h = hospitals.find(h => h.name === r.hospitalName); // fallback if IDs reset
+                if (!h && r.hospitalLat && r.hospitalLng) {
+                  h = { lat: r.hospitalLat, lng: r.hospitalLng, name: r.hospitalName };
+                }
+                if (h) {
+                  onGetDirections(h);
+                } else {
+                  alert("Cannot find hospital location for this request.");
+                }
               }} className="px-3 py-1.5 rounded-lg text-xs font-medium border border-[var(--border)] hover:bg-[var(--pill)] transition-colors">
                 Get Directions
               </button>

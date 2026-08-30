@@ -20,6 +20,7 @@ const express = require("express");
 const cors = require("cors");
 const { initializeApp, cert } = require("firebase-admin/app");
 const { getDatabase } = require("firebase-admin/database");
+const { getAuth } = require("firebase-admin/auth");
 const fs = require("fs");
 const path = require("path");
 
@@ -306,8 +307,44 @@ app.patch("/api/dispatch/:id/advance", (req, res) => {
 });
 
 // ---------------------------------------------------------------------
-// PATCH /api/hospitals/:id/inventory  { key, delta }  -> real-time update
+// AUTH ROUTES
 // ---------------------------------------------------------------------
+app.post("/api/auth/signup", async (req, res) => {
+    const { email, password, hospitalId } = req.body;
+    if (!db) return res.status(503).json({ error: "Database not initialized" });
+    try {
+        const userRecord = await getAuth().createUser({ email, password });
+        await db.ref(`users/${userRecord.uid}`).set({ hospitalId });
+        res.json({ success: true, hospitalId });
+    } catch (e) {
+        res.status(400).json({ error: e.message });
+    }
+});
+
+app.post("/api/auth/login", async (req, res) => {
+    const { email, password } = req.body;
+    const FIREBASE_WEB_API_KEY = process.env.FIREBASE_WEB_API_KEY;
+    if (!FIREBASE_WEB_API_KEY) return res.status(500).json({ error: "FIREBASE_WEB_API_KEY is not set in Server/.env" });
+    if (!db) return res.status(503).json({ error: "Database not initialized" });
+    
+    try {
+        const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FIREBASE_WEB_API_KEY}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, password, returnSecureToken: true })
+        });
+        const data = await response.json();
+        if (data.error) throw new Error(data.error.message);
+        
+        const uid = data.localId;
+        const snap = await db.ref(`users/${uid}`).once("value");
+        const userData = snap.val();
+        res.json({ success: true, hospitalId: userData?.hospitalId });
+    } catch (e) {
+        res.status(400).json({ error: e.message });
+    }
+});
+
 app.patch("/api/hospitals/:id/inventory", (req, res) => {
     const { key, delta } = req.body;
     const hIndex = hospitals.findIndex((x) => x.id === req.params.id);
