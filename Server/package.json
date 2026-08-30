@@ -15,5 +15,8 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "firebase-admin": "^14.3.0"
+  },
+  "allowScripts": {
+    "firebase-admin@14.3.0": true
   }
 }
