@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
+import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from "react-leaflet";
+import L from "leaflet";
 import {
   Siren, HeartPulse, Building2, MapPin, Navigation2, Phone, Clock,
   Plus, Minus, AlertTriangle, CheckCircle2, Users, Zap, Droplet,
@@ -59,35 +61,35 @@ const CRISIS_ICON = {
 
 const HOSPITALS_INIT = [
   {
-    id: "h1", name: "Vantage Trauma Center", distanceKm: 3.1, baseEta: 9, trafficX: 1.15,
+    id: "h1", name: "Vantage Trauma Center", distanceKm: 3.1, baseEta: 9, trafficX: 1.15, lat: 12.9716, lng: 77.5946,
     stock: { icu: 2, bloodNeg: 4, ventilator: 1, trauma: 3, burn: 0, incubator: 1 },
     freshness: { icu: 2, bloodNeg: 6, ventilator: 2, trauma: 1, burn: 40, incubator: 9 },
     capability: { Cardiac: 70, Trauma: 92, Respiratory: 65, Burn: 40, Obstetric: 50, Neurological: 60, "Mass Casualty": 88, General: 70 },
     currentCrisisType: "Trauma", crisisModeLocal: false
   },
   {
-    id: "h2", name: "Sunrise Multispecialty", distanceKm: 5.6, baseEta: 14, trafficX: 1.3,
+    id: "h2", name: "Sunrise Multispecialty", distanceKm: 5.6, baseEta: 14, trafficX: 1.3, lat: 12.9352, lng: 77.6245,
     stock: { icu: 0, bloodNeg: 1, ventilator: 0, trauma: 1, burn: 2, incubator: 0 },
     freshness: { icu: 33, bloodNeg: 12, ventilator: 51, trauma: 4, burn: 3, incubator: 22 },
     capability: { Cardiac: 55, Trauma: 45, Respiratory: 60, Burn: 75, Obstetric: 65, Neurological: 50, "Mass Casualty": 40, General: 60 },
     currentCrisisType: "Burn", crisisModeLocal: false
   },
   {
-    id: "h3", name: "Ashirwad General Hospital", distanceKm: 2.2, baseEta: 6, trafficX: 1.05,
+    id: "h3", name: "Ashirwad General Hospital", distanceKm: 2.2, baseEta: 6, trafficX: 1.05, lat: 12.9915, lng: 77.5942,
     stock: { icu: 5, bloodNeg: 0, ventilator: 3, trauma: 2, burn: 1, incubator: 2 },
     freshness: { icu: 1, bloodNeg: 58, ventilator: 5, trauma: 1, burn: 15, incubator: 2 },
     capability: { Cardiac: 85, Trauma: 60, Respiratory: 80, Burn: 45, Obstetric: 70, Neurological: 75, "Mass Casualty": 55, General: 80 },
     currentCrisisType: "General", crisisModeLocal: false
   },
   {
-    id: "h4", name: "Green Valley Medical", distanceKm: 8.9, baseEta: 21, trafficX: 1.4,
+    id: "h4", name: "Green Valley Medical", distanceKm: 8.9, baseEta: 21, trafficX: 1.4, lat: 13.0104, lng: 77.5806,
     stock: { icu: 3, bloodNeg: 2, ventilator: 2, trauma: 0, burn: 0, incubator: 3 },
     freshness: { icu: 7, bloodNeg: 3, ventilator: 19, trauma: 60, burn: 60, incubator: 4 },
     capability: { Cardiac: 60, Trauma: 40, Respiratory: 55, Burn: 35, Obstetric: 88, Neurological: 55, "Mass Casualty": 45, General: 65 },
     currentCrisisType: "Obstetric", crisisModeLocal: false
   },
   {
-    id: "h5", name: "Kaveri District Hospital", distanceKm: 4.4, baseEta: 11, trafficX: 1.1,
+    id: "h5", name: "Kaveri District Hospital", distanceKm: 4.4, baseEta: 11, trafficX: 1.1, lat: 12.9279, lng: 77.6271,
     stock: { icu: 1, bloodNeg: 0, ventilator: 1, trauma: 2, burn: 3, incubator: 0 },
     freshness: { icu: 4, bloodNeg: 45, ventilator: 8, trauma: 2, burn: 6, incubator: 30 },
     capability: { Cardiac: 50, Trauma: 65, Respiratory: 60, Burn: 80, Obstetric: 55, Neurological: 45, "Mass Casualty": 60, General: 60 },
@@ -183,13 +185,21 @@ function freshnessLabel(m) { return m < 1 ? "just now" : m === 1 ? "1 min ago" :
 function rankHospitals(hospitals, crisisType) {
   const resourceKey = CRISIS_RESOURCE[crisisType] || "icu";
   return hospitals.map((h) => {
-    const count = h.stock[resourceKey];
-    const eta = Math.round(h.baseEta * h.trafficX);
+    const count = h.stock[resourceKey] || 0;
+    const eta = h.baseEta ? Math.round(h.baseEta * h.trafficX) : 0;
     const resourceScore = Math.min(100, count * 25);
-    const etaScore = Math.max(0, 100 - eta * 4);
     const capScore = h.capability[crisisType] ?? 50;
-    const total = Math.round(0.4 * resourceScore + 0.3 * etaScore + 0.3 * capScore);
-    return { ...h, resourceKey, count, eta, resourceScore, etaScore, capScore, total };
+    const trafficPenalty = Math.max(0, eta - (h.baseEta || 0)); // Extra minutes due to traffic
+    
+    // New Formula: Priority to available resources (resourceScore + capScore).
+    // Penalties for distance (km) and traffic (minutes).
+    const total = Math.round(
+      (0.5 * resourceScore) + 
+      (0.3 * capScore) - 
+      (1.5 * (h.distanceKm || 0)) - 
+      (2.0 * trafficPenalty)
+    );
+    return { ...h, resourceKey, count, eta, resourceScore, capScore, trafficPenalty, total };
   }).sort((a, b) => b.total - a.total);
 }
 
@@ -207,6 +217,106 @@ export default function App() {
   const [dark, setDark] = useState(false);
   const [backendOnline, setBackendOnline] = useState(null); // null = still checking
   const theme = dark ? "dark" : "light";
+
+  const [userLocation, setUserLocation] = useState(null);
+  const [scanning, setScanning] = useState(false);
+
+  useEffect(() => {
+    if ("geolocation" in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        (err) => console.warn("Geolocation error, using default location", err)
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!userLocation) return;
+    const fetchHospitalsAndRoutes = async () => {
+      setScanning(true);
+      let baseHospitals = [];
+      
+      try {
+        const viewbox = `${userLocation.lng - 0.05},${userLocation.lat + 0.05},${userLocation.lng + 0.05},${userLocation.lat - 0.05}`;
+        const nominatimUrl = `https://nominatim.openstreetmap.org/search?format=json&amenity=hospital&viewbox=${viewbox}&bounded=1&limit=6`;
+        const res = await fetch(nominatimUrl);
+        const data = await res.json();
+        
+        if (data && data.length > 0) {
+          baseHospitals = data.map((el, i) => {
+            return {
+              id: `real_h${el.place_id}`,
+              name: el.name || `Local Hospital ${i+1}`,
+              lat: parseFloat(el.lat),
+              lng: parseFloat(el.lon),
+              stock: { 
+                icu: Math.floor(Math.random() * 5), 
+                oxygen: Math.floor(Math.random() * 20),
+                bloodNeg: 0,
+                ventilator: 0,
+                trauma: 0,
+                burn: 0,
+                incubator: 0
+              },
+              capability: { trauma: Math.floor(Math.random() * 100), cardiac: Math.floor(Math.random() * 100), respiratory: Math.floor(Math.random() * 100), neonatal: Math.floor(Math.random() * 100), burn: Math.floor(Math.random() * 100) },
+              freshness: { icu: 0, oxygen: 0 },
+              trafficX: 1.0 + (Math.random() * 0.4) // mock live traffic
+            };
+          }).filter(h => h.name && h.lat && h.lng);
+        }
+      } catch (e) {
+        console.warn("Nominatim API failed, falling back to mock hospitals", e);
+      }
+      
+      if (baseHospitals.length === 0) {
+        baseHospitals = HOSPITALS_INIT; // Fallback
+      }
+
+      // Fetch OSRM routes
+      let updatedHospitals = [...baseHospitals];
+      for (let i = 0; i < updatedHospitals.length; i++) {
+        let h = updatedHospitals[i];
+        if (h.lat && h.lng) {
+          try {
+            const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${userLocation.lng},${userLocation.lat};${h.lng},${h.lat}?overview=false`);
+            const data = await res.json();
+            if (data.routes && data.routes.length > 0) {
+              const route = data.routes[0];
+              h.distanceKm = Number((route.distance / 1000).toFixed(1));
+              h.baseEta = Math.round(route.duration / 60);
+            }
+          } catch (e) {
+            console.error("OSRM fetch error", e);
+          }
+        }
+      }
+      setHospitals(updatedHospitals);
+      
+      // Upload these real hospitals to the backend database so it stops using hardcoded ones
+      if (backendOnline) {
+        try {
+          await fetch(`${API_BASE}/api/hospitals/sync`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(updatedHospitals)
+          });
+        } catch (e) {
+          console.warn("Failed to sync hospitals to backend", e);
+        }
+      }
+
+      setScanning(false);
+    };
+    fetchHospitalsAndRoutes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userLocation, backendOnline]);
+
+  const handleGetDirections = (h) => {
+    if (userLocation && h.lat && h.lng) {
+      const url = `/directions?uLat=${userLocation.lat}&uLng=${userLocation.lng}&hLat=${h.lat}&hLng=${h.lng}&name=${encodeURIComponent(h.name)}`;
+      window.open(url, "_blank");
+    }
+  };
 
   // Cosmetic freshness tick — purely local, doesn't need the backend.
   useEffect(() => {
@@ -369,15 +479,16 @@ export default function App() {
       </header>
 
       <main className="max-w-6xl mx-auto px-5 py-6">
-        {mode === "patient" && <PatientView hospitals={hospitals} requests={requests} createRequest={createRequest} backendOnline={backendOnline} />}
+        {mode === "patient" && <PatientView hospitals={hospitals} requests={requests} createRequest={createRequest} backendOnline={backendOnline} onGetDirections={handleGetDirections} scanning={scanning} />}
         {mode === "hospital" && (
           <HospitalView hospitals={hospitals} requests={requests} adjustStock={adjustStock}
             setHospitalCrisisType={setHospitalCrisisType} updateRequestCrisisType={updateRequestCrisisType}
             globalCrisis={globalCrisis} setGlobalCrisis={setGlobalCrisis} />
         )}
-        {mode === "ambulance" && <AmbulanceView requests={requests} hospitals={hospitals} advanceRequest={advanceRequest} />}
+        {mode === "ambulance" && <AmbulanceView requests={requests} hospitals={hospitals} advanceRequest={advanceRequest} onGetDirections={handleGetDirections} />}
         {mode === "government" && <GovernmentView hospitals={hospitals} requests={requests} />}
       </main>
+
     </div>
   );
 }
@@ -385,7 +496,7 @@ export default function App() {
 // ---------------------------------------------------------------------------
 // PATIENT VIEW — voice/text intake -> AI severity -> ranked hospitals -> dispatch
 // ---------------------------------------------------------------------------
-function PatientView({ hospitals, requests, createRequest, backendOnline }) {
+function PatientView({ hospitals, requests, createRequest, backendOnline, onGetDirections, scanning }) {
   const [text, setText] = useState("");
   const [listening, setListening] = useState(false);
   const [voiceError, setVoiceError] = useState(null);
@@ -610,16 +721,20 @@ function PatientView({ hospitals, requests, createRequest, backendOnline }) {
               </button>
             </div>
           </div>
+          {scanning && <div className="text-[11px] font-mono text-[var(--accentBg)] mb-2 animate-pulse">Scanning locality for hospitals...</div>}
           {showFormula && (
             <div className="text-[11px] font-mono text-[var(--text)] bg-[var(--pill)] rounded-lg p-3 mb-3 leading-relaxed">
-              score = 0.4 × resource availability + 0.3 × (100 − ETA×4) + 0.3 × crisis-type capability<br />
-              ETA = base travel time × live traffic multiplier (Google Maps Directions API in production)
+              score = 0.5 × resource availability + 0.3 × capability − 1.5 × distance(km) − 2.0 × traffic_delay(min)<br />
+              Distance & ETA sourced live from OpenRouteService using user's real location.
             </div>
           )}
           <div className="space-y-2.5">
-            {ranked.map((h, i) => <RankedHospitalCard key={h.id} h={h} rank={i + 1} />)}
+            {ranked.map((h, i) => <RankedHospitalCard key={h.id} h={h} rank={i + 1} onGetDirections={onGetDirections} />)}
           </div>
-          <button onClick={dispatch} disabled={dispatching} className="mt-4 w-full sm:w-auto px-5 py-2.5 rounded-lg text-sm font-medium flex items-center justify-center gap-2 disabled:opacity-60"
+          <button onClick={() => {
+            if (result.ambulance) dispatch();
+            else onGetDirections(ranked[0]);
+          }} disabled={dispatching} className="mt-4 w-full sm:w-auto px-5 py-2.5 rounded-lg text-sm font-medium flex items-center justify-center gap-2 disabled:opacity-60"
             style={{ background: result.ambulance ? C.red : "var(--accentBg)", color: result.ambulance ? "#fff" : "var(--accentText)" }}>
             {result.ambulance ? <AmbulanceIcon size={15} /> : <Navigation2 size={15} />}
             {dispatching ? "Sending…" : result.ambulance ? `Confirm & dispatch ambulance to ${ranked[0]?.name}` : `Get directions to ${ranked[0]?.name}`}
@@ -632,12 +747,12 @@ function PatientView({ hospitals, requests, createRequest, backendOnline }) {
   );
 }
 
-function RankedHospitalCard({ h, rank }) {
+function RankedHospitalCard({ h, rank, onGetDirections }) {
   const Icon = RESOURCES.find((r) => r.key === h.resourceKey)?.icon || HeartPulse;
   const fColor = freshnessColor(h.freshness[h.resourceKey]);
   const has = h.count > 0;
   return (
-    <div className="rounded-xl border bg-[var(--surface)] p-3.5 flex items-center gap-4" style={{ borderColor: rank === 1 ? "var(--accentBg)" : "var(--border)" }}>
+    <div className="rounded-xl border bg-[var(--surface)] p-3.5 flex items-center gap-4 hover:shadow-sm transition-shadow" style={{ borderColor: rank === 1 ? "var(--accentBg)" : "var(--border)" }}>
       <span className="font-mono text-xs text-[var(--muted)] w-6 shrink-0">#{rank}</span>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
@@ -654,7 +769,10 @@ function RankedHospitalCard({ h, rank }) {
         <Icon size={13} color={has ? C.green : C.red} />
         <span className="font-mono text-sm font-semibold" style={{ color: has ? C.green : C.red }}>{h.count}</span>
       </div>
-      <div className="font-mono text-sm font-semibold shrink-0 w-10 text-right">{h.total}</div>
+      <div className="font-mono text-sm font-semibold shrink-0 w-8 text-right mr-1">{h.total}</div>
+      <button onClick={() => onGetDirections(h)} className="px-3 py-1.5 rounded-lg text-[11px] font-medium border border-[var(--border)] hover:bg-[var(--pill)] transition-colors shrink-0 whitespace-nowrap">
+        Get directions
+      </button>
     </div>
   );
 }
@@ -801,9 +919,10 @@ function HospitalView({ hospitals, requests, adjustStock, setHospitalCrisisType,
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // AMBULANCE VIEW
 // ---------------------------------------------------------------------------
-function AmbulanceView({ requests, hospitals, advanceRequest }) {
+function AmbulanceView({ requests, hospitals, advanceRequest, onGetDirections }) {
   const active = requests.filter((r) => r.ambulance);
   const STAGE_LABEL = { dispatched: "Dispatched", en_route: "En route", arrived: "Arrived", handed_off: "Handed off" };
 
@@ -811,7 +930,7 @@ function AmbulanceView({ requests, hospitals, advanceRequest }) {
     <div className="space-y-4">
       <h1 className="font-display text-2xl font-semibold tracking-tight">Active ambulance dispatches</h1>
       {active.length === 0 ? (
-        <p className="text-sm text-[var(--muted)] rounded-xl border border-dashed border-[var(--border)] p-4">No active dispatches. Requests scoring ≥ 55 from the Patient tab will appear here.</p>
+        <p className="text-sm text-[var(--muted)] rounded-xl border border-dashed border-[var(--border)] p-4">No active dispatches. Requests scoring &gt;= 55 from the Patient tab will appear here.</p>
       ) : active.map((r) => (
         <div key={r.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
           <div className="flex items-center justify-between flex-wrap gap-3">
@@ -827,6 +946,12 @@ function AmbulanceView({ requests, hospitals, advanceRequest }) {
               </div>
             </div>
             <div className="flex items-center gap-2">
+              <button onClick={() => {
+                const h = hospitals.find(h => h.id === r.hospitalId);
+                if (h) onGetDirections(h);
+              }} className="px-3 py-1.5 rounded-lg text-xs font-medium border border-[var(--border)] hover:bg-[var(--pill)] transition-colors">
+                Get Directions
+              </button>
               <span className="text-xs font-mono px-2.5 py-1 rounded-full bg-[var(--pill)]">{STAGE_LABEL[r.status]}</span>
               <button disabled={r.status === "handed_off"} onClick={() => advanceRequest(r.id)}
                 className="px-3 py-1.5 rounded-lg text-xs font-medium disabled:opacity-40" style={{ background: "var(--accentBg)", color: "var(--accentText)" }}>

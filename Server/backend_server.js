@@ -31,7 +31,7 @@ app.use(express.json());
 // ---------------------------------------------------------------------
 // In-memory mock store (swap for Firebase Realtime Database / Firestore)
 // ---------------------------------------------------------------------
-const hospitals = require("./mock_hospitals.json"); // same shape as HOSPITALS_INIT in the frontend
+let hospitals = require("./mock_hospitals.json"); // same shape as HOSPITALS_INIT in the frontend
 let requests = [];
 
 const CRISIS_TYPES = ["Cardiac", "Trauma", "Respiratory", "Burn", "Obstetric", "Neurological", "Mass Casualty", "General"];
@@ -190,6 +190,18 @@ app.post("/api/triage", async (req, res) => {
 // ---------------------------------------------------------------------
 app.get("/api/hospitals", (req, res) => {
     res.json(hospitals);
+});
+
+app.post("/api/hospitals/sync", (req, res) => {
+    const localHospitals = req.body;
+    if (Array.isArray(localHospitals) && localHospitals.length > 0) {
+        // Only keep local hospitals that have valid lat/lng and aren't already hardcoded mock ones
+        // Actually, just replace the backend's hospitals with the dynamic ones
+        hospitals = localHospitals;
+        res.json({ success: true, count: hospitals.length });
+    } else {
+        res.status(400).json({ error: "Invalid hospital array" });
+    }
 });
 
 app.get("/api/hospitals/rank", async (req, res) => {
