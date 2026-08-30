@@ -188,7 +188,7 @@ function rankHospitals(hospitals, crisisType) {
     const count = h.stock[resourceKey] || 0;
     const eta = h.baseEta ? Math.round(h.baseEta * h.trafficX) : 0;
     const resourceScore = Math.min(100, count * 25);
-    const capScore = h.capability[crisisType] ?? 50;
+    const capScore = (h.specialties && h.specialties.includes(crisisType)) ? 100 : (h.capability?.[crisisType] ?? 50);
     const trafficPenalty = Math.max(0, eta - (h.baseEta || 0)); // Extra minutes due to traffic
     
     // New Formula: Priority to available resources (resourceScore + capScore).
@@ -238,7 +238,7 @@ export default function App() {
       
       try {
         const viewbox = `${userLocation.lng - 0.05},${userLocation.lat + 0.05},${userLocation.lng + 0.05},${userLocation.lat - 0.05}`;
-        const nominatimUrl = `https://nominatim.openstreetmap.org/search?format=json&amenity=hospital&viewbox=${viewbox}&bounded=1&limit=6`;
+        const nominatimUrl = `https://nominatim.openstreetmap.org/search?format=json&amenity=hospital&viewbox=${viewbox}&bounded=1&limit=15`;
         const res = await fetch(nominatimUrl);
         const data = await res.json();
         
@@ -259,8 +259,10 @@ export default function App() {
                 incubator: 0
               },
               capability: { trauma: Math.floor(Math.random() * 100), cardiac: Math.floor(Math.random() * 100), respiratory: Math.floor(Math.random() * 100), neonatal: Math.floor(Math.random() * 100), burn: Math.floor(Math.random() * 100) },
-              freshness: { icu: 0, oxygen: 0 },
-              trafficX: 1.0 + (Math.random() * 0.4) // mock live traffic
+              freshness: { icu: 0, oxygen: 0, bloodNeg: 0, ventilator: 0, trauma: 0, burn: 0, incubator: 0 },
+              trafficX: 1.0 + (Math.random() * 0.4), // mock live traffic
+              specialties: [], // Add an empty specialties array
+
             };
           }).filter(h => h.name && h.lat && h.lng);
         }
@@ -368,14 +370,23 @@ export default function App() {
     } catch { /* offline — local state already applied */ }
   }
 
-  async function setHospitalCrisisType(hospitalId, type) {
-    setHospitals((prev) => prev.map((h) => h.id === hospitalId ? { ...h, currentCrisisType: type } : h));
-    try {
-      await fetch(`${API_BASE}/api/hospitals/${hospitalId}/crisis-type`, {
-        method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type }),
-      });
-    } catch { /* offline — local state already applied */ }
+  async function toggleHospitalSpecialty(hospitalId, type) {
+    const targetHospital = hospitals.find(h => h.id === hospitalId);
+    if (!targetHospital) return;
+    
+    const current = targetHospital.specialties || [];
+    const updatedSpecialties = current.includes(type) ? current.filter(t => t !== type) : [...current, type];
+    
+    setHospitals((prev) => prev.map((h) => h.id === hospitalId ? { ...h, specialties: updatedSpecialties } : h));
+    
+    if (backendOnline) {
+      try {
+        await fetch(`${API_BASE}/api/hospitals/${hospitalId}/specialties`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ specialties: updatedSpecialties }),
+        });
+      } catch { /* offline - local state already applied */ }
+    }
   }
 
   // Returns the created request (with its real id) so callers — like the
@@ -482,7 +493,7 @@ export default function App() {
         {mode === "patient" && <PatientView hospitals={hospitals} requests={requests} createRequest={createRequest} backendOnline={backendOnline} onGetDirections={handleGetDirections} scanning={scanning} />}
         {mode === "hospital" && (
           <HospitalView hospitals={hospitals} requests={requests} adjustStock={adjustStock}
-            setHospitalCrisisType={setHospitalCrisisType} updateRequestCrisisType={updateRequestCrisisType}
+            toggleHospitalSpecialty={toggleHospitalSpecialty} updateRequestCrisisType={updateRequestCrisisType}
             globalCrisis={globalCrisis} setGlobalCrisis={setGlobalCrisis} />
         )}
         {mode === "ambulance" && <AmbulanceView requests={requests} hospitals={hospitals} advanceRequest={advanceRequest} onGetDirections={handleGetDirections} />}
@@ -810,11 +821,12 @@ function TrackingCard({ request }) {
 // ---------------------------------------------------------------------------
 // HOSPITAL VIEW
 // ---------------------------------------------------------------------------
-function HospitalView({ hospitals, requests, adjustStock, setHospitalCrisisType, updateRequestCrisisType, globalCrisis, setGlobalCrisis }) {
+function HospitalView({ hospitals, requests, adjustStock, toggleHospitalSpecialty, updateRequestCrisisType, globalCrisis, setGlobalCrisis }) {
   const [hospitalId, setHospitalId] = useState(hospitals[0].id);
   const [pickerOpen, setPickerOpen] = useState(false);
   const hospital = hospitals.find((h) => h.id === hospitalId);
   const incoming = requests.filter((r) => r.hospitalId === hospitalId);
+  const specialties = hospital.specialties || [];
 
   return (
     <div className="space-y-5">
@@ -835,17 +847,17 @@ function HospitalView({ hospitals, requests, adjustStock, setHospitalCrisisType,
         </div>
         <button onClick={() => setGlobalCrisis((c) => !c)}
           className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm ${globalCrisis ? "bg-[#E4572E] text-white crisis-ring" : "bg-[var(--surface)] border border-[var(--border)] text-[var(--text)]"}`}>
-          <Siren size={15} />{globalCrisis ? "Crisis Mode — Active" : "Activate Crisis Mode"}
+          <Siren size={15} />{globalCrisis ? "Crisis Mode - Active" : "Activate Crisis Mode"}
         </button>
       </section>
 
       <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 flex items-center justify-between flex-wrap gap-3">
         <div>
-          <div className="text-xs font-mono text-[var(--muted)] mb-1">This facility is currently declared as handling</div>
+          <div className="text-xs font-mono text-[var(--muted)] mb-1">This facility specialises in</div>
           <div className="flex items-center gap-2 flex-wrap">
             {CRISIS_TYPES.map((t) => (
-              <button key={t} onClick={() => setHospitalCrisisType(hospitalId, t)}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs border ${hospital.currentCrisisType === t ? "bg-[var(--accentBg)] text-[var(--accentText)] border-[var(--accentBg)]" : "bg-[var(--surface)] border-[var(--border)] text-[var(--text)]"}`}>
+              <button key={t} onClick={() => toggleHospitalSpecialty(hospitalId, t)}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs border ${specialties.includes(t) ? "bg-[var(--accentBg)] text-[var(--accentText)] border-[var(--accentBg)]" : "bg-[var(--surface)] border-[var(--border)] text-[var(--text)]"}`}>
                 {React.createElement(CRISIS_ICON[t], { size: 12 })}{t}
               </button>
             ))}

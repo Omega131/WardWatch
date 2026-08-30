@@ -18,21 +18,42 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-// const admin = require("firebase-admin");         // real-time inventory DB
-// const { Client } = require("@googlemaps/google-maps-services-js"); // ETA/traffic
+const { initializeApp, cert } = require("firebase-admin/app");
+const { getDatabase } = require("firebase-admin/database");
+const fs = require("fs");
+const path = require("path");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// admin.initializeApp({ credential: admin.credential.applicationDefault() });
-// const db = admin.database();
-
-// ---------------------------------------------------------------------
-// In-memory mock store (swap for Firebase Realtime Database / Firestore)
-// ---------------------------------------------------------------------
-let hospitals = require("./mock_hospitals.json"); // same shape as HOSPITALS_INIT in the frontend
+let db = null;
+let hospitals = require("./mock_hospitals.json"); 
 let requests = [];
+
+const serviceAccountPath = path.join(__dirname, "firebaseServiceAccountKey.json");
+if (fs.existsSync(serviceAccountPath)) {
+    const serviceAccount = require(serviceAccountPath);
+    initializeApp({
+        credential: cert(serviceAccount),
+        databaseURL: `https://wardwatch-f2045-default-rtdb.asia-southeast1.firebasedatabase.app`
+    });
+    db = getDatabase();
+    
+    console.log("🔥 Firebase initialized securely from Service Account!");
+    
+    // Sync in-memory state with Firebase automatically
+    db.ref("hospitals").on("value", (snapshot) => {
+        const data = snapshot.val();
+        if (data && Array.isArray(data)) hospitals = data;
+    });
+    db.ref("requests").on("value", (snapshot) => {
+        const data = snapshot.val();
+        if (data) requests = Object.values(data);
+    });
+} else {
+    console.warn("⚠️ firebaseServiceAccountKey.json not found! Running in memory-only fallback mode.");
+}
 
 const CRISIS_TYPES = ["Cardiac", "Trauma", "Respiratory", "Burn", "Obstetric", "Neurological", "Mass Casualty", "General"];
 const RESOURCE_LABELS = ["ICU Bed", "O- Blood", "Ventilator", "Trauma Bay", "Burn Unit", "Infant Incubator"];
@@ -195,9 +216,8 @@ app.get("/api/hospitals", (req, res) => {
 app.post("/api/hospitals/sync", (req, res) => {
     const localHospitals = req.body;
     if (Array.isArray(localHospitals) && localHospitals.length > 0) {
-        // Only keep local hospitals that have valid lat/lng and aren't already hardcoded mock ones
-        // Actually, just replace the backend's hospitals with the dynamic ones
         hospitals = localHospitals;
+        if (db) db.ref("hospitals").set(hospitals);
         res.json({ success: true, count: hospitals.length });
     } else {
         res.status(400).json({ error: "Invalid hospital array" });
@@ -222,7 +242,7 @@ app.get("/api/hospitals/rank", async (req, res) => {
         const eta = Math.round(h.baseEta * h.trafficX);
         const resourceScore = Math.min(100, count * 25);
         const etaScore = Math.max(0, 100 - eta * 4);
-        const capScore = h.capability[crisisType] ?? 50;
+        const capScore = (h.specialties && h.specialties.includes(crisisType)) ? 100 : (h.capability?.[crisisType] ?? 50);
         const total = Math.round(0.4 * resourceScore + 0.3 * etaScore + 0.3 * capScore);
         return { ...h, resourceKey, count, eta, total };
     }).sort((a, b) => b.total - a.total);
@@ -234,18 +254,23 @@ app.get("/api/hospitals/rank", async (req, res) => {
 // POST /api/dispatch  -> create a dispatch request, push to assigned hospital
 // ---------------------------------------------------------------------
 app.post("/api/dispatch", (req, res) => {
-    const request = { id: `r${requests.length + 1}`, status: "dispatched", createdAt: Date.now(), ...req.body };
+    const request = { id: `r${Date.now()}`, status: "dispatched", createdAt: Date.now(), ...req.body };
     requests.push(request);
-    // db.ref(`requests/${request.id}`).set(request);   // Firebase real-time push
+    if (db) db.ref(`requests/${request.id}`).set(request);
     res.status(201).json(request);
 });
 
 app.patch("/api/dispatch/:id/advance", (req, res) => {
     const order = ["dispatched", "en_route", "arrived", "handed_off"];
-    const r = requests.find((x) => x.id === req.params.id);
-    if (!r) return res.status(404).end();
+    const rIndex = requests.findIndex((x) => x.id === req.params.id);
+    if (rIndex === -1) return res.status(404).end();
+    
+    const r = requests[rIndex];
     const i = order.indexOf(r.status);
-    if (i < order.length - 1) r.status = order[i + 1];
+    if (i < order.length - 1) {
+        r.status = order[i + 1];
+        if (db) db.ref(`requests/${r.id}/status`).set(r.status);
+    }
     res.json(r);
 });
 
@@ -254,18 +279,30 @@ app.patch("/api/dispatch/:id/advance", (req, res) => {
 // ---------------------------------------------------------------------
 app.patch("/api/hospitals/:id/inventory", (req, res) => {
     const { key, delta } = req.body;
-    const h = hospitals.find((x) => x.id === req.params.id);
-    if (!h) return res.status(404).end();
+    const hIndex = hospitals.findIndex((x) => x.id === req.params.id);
+    if (hIndex === -1) return res.status(404).end();
+    
+    const h = hospitals[hIndex];
     h.stock[key] = Math.max(0, h.stock[key] + delta);
     h.freshness[key] = 0;
-    // db.ref(`hospitals/${h.id}/stock/${key}`).set(h.stock[key]);
+    
+    if (db) db.ref(`hospitals/${hIndex}`).set(h);
     res.json(h);
 });
 
-app.patch("/api/hospitals/:id/crisis-type", (req, res) => {
-    const h = hospitals.find((x) => x.id === req.params.id);
-    if (!h) return res.status(404).end();
-    h.currentCrisisType = req.body.type;
+app.patch("/api/hospitals/:id/specialties", (req, res) => {
+    const hIndex = hospitals.findIndex((x) => x.id === req.params.id);
+    if (hIndex === -1) return res.status(404).end();
+    
+    const h = hospitals[hIndex];
+    h.specialties = req.body.specialties || [];
+    
+    console.log(`[Firebase Sync] Updating specialties for ${h.name} (${h.id}) to:`, h.specialties);
+    if (db) {
+        db.ref(`hospitals/${hIndex}/specialties`).set(h.specialties)
+          .then(() => console.log(`[Firebase Sync] Successfully saved to Firebase!`))
+          .catch(e => console.error(`[Firebase Sync] Error saving to Firebase:`, e));
+    }
     res.json(h);
 });
 
