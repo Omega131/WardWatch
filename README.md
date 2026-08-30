@@ -20,6 +20,7 @@ In a **separate terminal**, from the `server/` folder:
 ```bash
 npm install
 npm install react-router-dom --legacy-peer-deps
+npm install firebase-admin
 node backend_server.js
 ```
 
