@@ -204,10 +204,9 @@ function rankHospitals(hospitals, types) {
     // New Formula: Priority to available resources (resourceScore + capScore).
     // Penalties for distance (km) and traffic (minutes).
     const total = Math.round(
-      (0.5 * resourceScore) + 
-      (0.3 * capScore) - 
-      (1.5 * (h.distanceKm || 0)) - 
-      (2.0 * trafficPenalty)
+      (0.7 * resourceScore) + 
+      (0.4 * capScore) +
+      (0.5 * (h.distanceKm || 0)) 
     );
     return { ...h, resourceKey, count, eta, resourceScore, capScore, trafficPenalty, total };
   }).sort((a, b) => b.total - a.total);
@@ -773,7 +772,7 @@ function PatientView({ hospitals, requests, createRequest, backendOnline, onGetD
           {scanning && <div className="text-[11px] font-mono text-[var(--accentBg)] mb-2 animate-pulse">Scanning locality for hospitals...</div>}
           {showFormula && (
             <div className="text-[11px] font-mono text-[var(--text)] bg-[var(--pill)] rounded-lg p-3 mb-3 leading-relaxed">
-              score = 0.5 × resource availability + 0.3 × capability − 1.5 × distance(km) − 2.0 × traffic_delay(min)<br />
+              score = 0.7 × resource availability + 0.4 × specialty + 0.5 × distance(km)<br />
               Distance & ETA sourced live from OpenRouteService using user's real location.
             </div>
           )}
