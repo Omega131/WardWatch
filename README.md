@@ -6,6 +6,8 @@ The app has two parts that run separately: a React/Vite frontend and a small Nod
 
 ```bash
 npm install
+npm install lucide-react
+npm install tailwindcss @tailwindcss/vite
 npm run dev
 ```
 
@@ -17,6 +19,7 @@ In a **separate terminal**, from the `server/` folder:
 
 ```bash
 npm install
+npm install react-router-dom --legacy-peer-deps
 node backend_server.js
 ```
 
