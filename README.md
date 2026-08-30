@@ -1,16 +1,37 @@
-# React + Vite
+## Running WardWatch locally
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The app has two parts that run separately: a React/Vite frontend and a small Node/Express backend. The frontend works on its own with local mock data, but for the full experience (real-time triage scoring, live hospital ranking) run both.
 
-Currently, two official plugins are available:
+### 1. Frontend
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+npm install
+npm run dev
+```
 
-## React Compiler
+Opens at `http://localhost:5173`. Requires `lucide-react` and Tailwind (`tailwindcss` + `@tailwindcss/vite`) — see `package.json` / `vite.config.js`.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### 2. Backend (optional but recommended)
 
-## Expanding the Oxlint configuration
+In a **separate terminal**, from the `server/` folder:
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+```bash
+npm install
+node backend_server.js
+```
+
+Runs at `http://localhost:4000`. Requires `mock_hospitals.json` to be present in the same folder as `backend_server.js`.
+
+### How they connect
+
+The frontend automatically checks whether the backend is reachable on load:
+
+- **Backend running** → the header shows "backend online," and severity scoring, hospital ranking, inventory updates, and ambulance dispatch all go through real API calls to `localhost:4000`.
+- **Backend not running** → the header shows "backend offline," and the app falls back to identical logic computed locally in the browser. Nothing breaks either way — this is intentional, so a demo never fails just because someone forgot to start the second terminal.
+
+Both need to be running at the same time, in two separate terminal tabs, for the live-backend experience.
+
+### Notes
+
+- The backend's API base URL is hardcoded to `http://localhost:4000` in `App.jsx` (see the `API_BASE` constant near the top) — change that if you deploy the backend elsewhere.
+- `backend_server.js` uses in-memory storage (`mock_hospitals.json` + an in-memory `requests` array) — restarting the backend resets all inventory changes and dispatch history. Swapping in Firebase is the next real step (see the commented-out lines at the top of the file).
