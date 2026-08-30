@@ -154,25 +154,25 @@ const SAMPLE_TRANSCRIPTS = [
 function analyzeSeverity(text) {
   const t = text.toLowerCase();
   let score = 0;
-  let bestType = "General";
-  let bestWeight = 0;
+  const typesSet = new Set();
   const matched = [];
   KEYWORDS.forEach((k) => {
     if (t.includes(k.phrase)) {
       matched.push(k.phrase);
       score += k.weight;
-      if (k.weight > bestWeight) { bestWeight = k.weight; bestType = k.type; }
+      typesSet.add(k.type);
     }
   });
+  if (typesSet.size === 0) typesSet.add("General");
   score = Math.min(100, score);
-  const type = matched.length ? bestType : "General";
+  const types = Array.from(typesSet);
   const category = score >= 70 ? "Critical" : score >= 35 ? "Urgent" : "Stable";
   const ambulance = score >= 55; // single cutoff integer that gates ambulance dispatch
   return {
-    score, category, type, matched, ambulance,
-    resources: [RESOURCES.find((r) => r.key === CRISIS_RESOURCE[type])?.label].filter(Boolean),
-    specialists: SPECIALIST_BY_TYPE[type],
-    firstAid: FIRST_AID[type],
+    score, category, types, matched, ambulance,
+    resources: [RESOURCES.find((r) => r.key === CRISIS_RESOURCE[types[0]])?.label].filter(Boolean),
+    specialists: SPECIALIST_BY_TYPE[types[0]],
+    firstAid: FIRST_AID[types[0]],
   };
 }
 
@@ -182,13 +182,23 @@ function freshnessColor(m) { return m <= 5 ? C.green : m <= 20 ? C.amber : C.red
 function freshnessLabel(m) { return m < 1 ? "just now" : m === 1 ? "1 min ago" : `${m} min ago`; }
 
 // hospital-ranking formula — mirrors backend/server.js rankHospitals()
-function rankHospitals(hospitals, crisisType) {
-  const resourceKey = CRISIS_RESOURCE[crisisType] || "icu";
+function rankHospitals(hospitals, types) {
+  if (!Array.isArray(types)) types = [types || "General"];
+  const resourceKey = CRISIS_RESOURCE[types[0]] || "icu";
   return hospitals.map((h) => {
     const count = h.stock[resourceKey] || 0;
     const eta = h.baseEta ? Math.round(h.baseEta * h.trafficX) : 0;
     const resourceScore = Math.min(100, count * 25);
-    const capScore = (h.specialties && h.specialties.includes(crisisType)) ? 100 : (h.capability?.[crisisType] ?? 50);
+    
+    let capScore = 50;
+    if (h.specialties && h.specialties.length > 0) {
+        const matched = types.filter(t => h.specialties.includes(t)).length;
+        capScore = Math.round((matched / types.length) * 100);
+    } else {
+        const sum = types.reduce((acc, t) => acc + (h.capability?.[t] ?? 50), 0);
+        capScore = Math.round(sum / types.length);
+    }
+    
     const trafficPenalty = Math.max(0, eta - (h.baseEta || 0)); // Extra minutes due to traffic
     
     // New Formula: Priority to available resources (resourceScore + capScore).
@@ -235,46 +245,75 @@ export default function App() {
     const fetchHospitalsAndRoutes = async () => {
       setScanning(true);
       let baseHospitals = [];
-      
-      try {
-        const viewbox = `${userLocation.lng - 0.05},${userLocation.lat + 0.05},${userLocation.lng + 0.05},${userLocation.lat - 0.05}`;
-        const nominatimUrl = `https://nominatim.openstreetmap.org/search?format=json&amenity=hospital&viewbox=${viewbox}&bounded=1&limit=15`;
-        const res = await fetch(nominatimUrl);
-        const data = await res.json();
-        
-        if (data && data.length > 0) {
-          baseHospitals = data.map((el, i) => {
-            return {
-              id: `real_h${el.place_id}`,
-              name: el.name || `Local Hospital ${i+1}`,
-              lat: parseFloat(el.lat),
-              lng: parseFloat(el.lon),
-              stock: { 
-                icu: Math.floor(Math.random() * 5), 
-                oxygen: Math.floor(Math.random() * 20),
-                bloodNeg: 0,
-                ventilator: 0,
-                trauma: 0,
-                burn: 0,
-                incubator: 0
-              },
-              capability: { trauma: Math.floor(Math.random() * 100), cardiac: Math.floor(Math.random() * 100), respiratory: Math.floor(Math.random() * 100), neonatal: Math.floor(Math.random() * 100), burn: Math.floor(Math.random() * 100) },
-              freshness: { icu: 0, oxygen: 0, bloodNeg: 0, ventilator: 0, trauma: 0, burn: 0, incubator: 0 },
-              trafficX: 1.0 + (Math.random() * 0.4), // mock live traffic
-              specialties: [], // Add an empty specialties array
+      let backendHasRealData = false;
 
-            };
-          }).filter(h => h.name && h.lat && h.lng);
+      // 1. Try to fetch existing hospitals from backend
+      if (backendOnline) {
+        let retries = 5;
+        while (retries > 0) {
+          try {
+            const res = await fetch(`${API_BASE}/api/hospitals`);
+            if (res.status === 503) {
+              await new Promise(r => setTimeout(r, 500));
+              retries--;
+              continue;
+            }
+            if (res.ok) {
+              const data = await res.json();
+              if (data && data.length > 0 && data.some(h => h.id.startsWith("real_"))) {
+                baseHospitals = data;
+                backendHasRealData = true;
+              }
+            }
+            break;
+          } catch (e) {
+            console.warn("Failed to check backend for existing hospitals", e);
+            break;
+          }
         }
-      } catch (e) {
-        console.warn("Nominatim API failed, falling back to mock hospitals", e);
+      }
+
+      // 2. If backend doesn't have real hospitals, scan Nominatim
+      if (!backendHasRealData) {
+        try {
+          const viewbox = `${userLocation.lng - 0.05},${userLocation.lat + 0.05},${userLocation.lng + 0.05},${userLocation.lat - 0.05}`;
+          const nominatimUrl = `https://nominatim.openstreetmap.org/search?format=json&amenity=hospital&viewbox=${viewbox}&bounded=1&limit=15`;
+          const res = await fetch(nominatimUrl);
+          const data = await res.json();
+          
+          if (data && data.length > 0) {
+            baseHospitals = data.map((el, i) => {
+              return {
+                id: `real_h${el.place_id}`,
+                name: el.name || `Local Hospital ${i+1}`,
+                lat: parseFloat(el.lat),
+                lng: parseFloat(el.lon),
+                stock: { 
+                  icu: Math.floor(Math.random() * 5), 
+                  oxygen: Math.floor(Math.random() * 20),
+                  bloodNeg: 0,
+                  ventilator: 0,
+                  trauma: 0,
+                  burn: 0,
+                  incubator: 0
+                },
+                capability: { trauma: Math.floor(Math.random() * 100), cardiac: Math.floor(Math.random() * 100), respiratory: Math.floor(Math.random() * 100), neonatal: Math.floor(Math.random() * 100), burn: Math.floor(Math.random() * 100) },
+                freshness: { icu: 0, oxygen: 0, bloodNeg: 0, ventilator: 0, trauma: 0, burn: 0, incubator: 0 },
+                trafficX: 1.0 + (Math.random() * 0.4), // mock live traffic
+                specialties: [], // Add an empty specialties array
+              };
+            }).filter(h => h.name && h.lat && h.lng);
+          }
+        } catch (e) {
+          console.warn("Nominatim API failed, falling back to mock hospitals", e);
+        }
       }
       
       if (baseHospitals.length === 0) {
         baseHospitals = HOSPITALS_INIT; // Fallback
       }
 
-      // Fetch OSRM routes
+      // 3. Fetch OSRM routes to update ETA and distance
       let updatedHospitals = [...baseHospitals];
       for (let i = 0; i < updatedHospitals.length; i++) {
         let h = updatedHospitals[i];
@@ -294,8 +333,8 @@ export default function App() {
       }
       setHospitals(updatedHospitals);
       
-      // Upload these real hospitals to the backend database so it stops using hardcoded ones
-      if (backendOnline) {
+      // 4. Upload these real hospitals to the backend database ONLY IF we generated them
+      if (!backendHasRealData && backendOnline) {
         try {
           await fetch(`${API_BASE}/api/hospitals/sync`, {
             method: "POST",
@@ -306,7 +345,6 @@ export default function App() {
           console.warn("Failed to sync hospitals to backend", e);
         }
       }
-
       setScanning(false);
     };
     fetchHospitalsAndRoutes();
@@ -331,22 +369,19 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  // On load: ping the backend, and if it's up, replace the built-in mock
-  // hospitals with whatever the backend holds (its own mock_hospitals.json).
+  // On load: ping the backend, and if it's up, load dispatch requests.
+  // We do NOT setHospitals here because the location effect below will fetch
+  // them and compute OSRM driving routes before calling setHospitals.
   useEffect(() => {
     (async () => {
       try {
         const ping = await fetch(`${API_BASE}/api/health`);
         if (!ping.ok) throw new Error();
         setBackendOnline(true);
-        const [hRes, rRes] = await Promise.all([
-          fetch(`${API_BASE}/api/hospitals`),
-          fetch(`${API_BASE}/api/dispatch`),
-        ]);
-        if (hRes.ok) setHospitals(await hRes.json());
+        const rRes = await fetch(`${API_BASE}/api/dispatch`);
         if (rRes.ok) setRequests(await rRes.json());
       } catch {
-        setBackendOnline(false); // backend not running — the app still works on local mock data
+        setBackendOnline(false); // backend not running - the app still works on local mock data
       }
     })();
   }, []);
@@ -370,23 +405,23 @@ export default function App() {
     } catch { /* offline — local state already applied */ }
   }
 
-  async function toggleHospitalSpecialty(hospitalId, type) {
-    const targetHospital = hospitals.find(h => h.id === hospitalId);
-    if (!targetHospital) return;
-    
-    const current = targetHospital.specialties || [];
-    const updatedSpecialties = current.includes(type) ? current.filter(t => t !== type) : [...current, type];
-    
-    setHospitals((prev) => prev.map((h) => h.id === hospitalId ? { ...h, specialties: updatedSpecialties } : h));
-    
-    if (backendOnline) {
-      try {
-        await fetch(`${API_BASE}/api/hospitals/${hospitalId}/specialties`, {
+  function toggleHospitalSpecialty(hospitalId, type) {
+    setHospitals((prev) => {
+      const targetHospital = prev.find(h => h.id === hospitalId);
+      if (!targetHospital) return prev;
+      
+      const current = targetHospital.specialties || [];
+      const updatedSpecialties = current.includes(type) ? current.filter(t => t !== type) : [...current, type];
+      
+      if (backendOnline) {
+        fetch(`${API_BASE}/api/hospitals/${hospitalId}/specialties`, {
           method: "PATCH", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ specialties: updatedSpecialties }),
-        });
-      } catch { /* offline - local state already applied */ }
-    }
+        }).catch(() => {});
+      }
+      
+      return prev.map((h) => h.id === hospitalId ? { ...h, specialties: updatedSpecialties } : h);
+    });
   }
 
   // Returns the created request (with its real id) so callers — like the
@@ -468,7 +503,8 @@ export default function App() {
                 const active = mode === t.key;
                 return (
                   <button key={t.key} onClick={() => setMode(t.key)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${active ? "bg-[var(--accentBg)] text-[var(--accentText)]" : "text-[var(--muted)]"}`}>
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${!active ? "text-[var(--muted)]" : ""}`}
+                    style={active ? { background: "var(--accentBg)", color: "var(--accentText)" } : {}}>
                     <Icon size={14} />{t.label}
                   </button>
                 );
@@ -602,23 +638,23 @@ function PatientView({ hospitals, requests, createRequest, backendOnline, onGetD
     // 2. Hospital ranking — try the backend's /api/hospitals/rank, which
     // ranks *its own* copy of the hospital data, not this tab's local state.
     try {
-      const res = await fetch(`${API_BASE}/api/hospitals/rank?crisisType=${encodeURIComponent(severity.type)}`);
+      const typesQuery = encodeURIComponent(JSON.stringify(severity.types));
+      const res = await fetch(`${API_BASE}/api/hospitals/rank?types=${typesQuery}`);
       if (!res.ok) throw new Error();
       setRanked(await res.json());
       setRankSource("backend");
     } catch {
-      setRanked(rankHospitals(hospitals, severity.type)); // local fallback
+      setRanked(rankHospitals(hospitals, severity.types)); // local fallback
       setRankSource("local");
     }
     setAnalyzing(false);
   }
 
   async function dispatch() {
-    if (!result || !ranked.length) return;
     setDispatching(true);
     const top = ranked[0];
     const created = await createRequest({
-      patientText: text, score: result.score, category: result.category, crisisTypeAI: result.type,
+      patientText: text, score: result.score, category: result.category, crisisTypeAI: result.types[0],
       confirmedType: null, ambulance: result.ambulance, hospitalId: top.id, hospitalName: top.name, eta: top.eta,
     });
     setMyRequestId(created.id);
@@ -665,7 +701,7 @@ function PatientView({ hospitals, requests, createRequest, backendOnline, onGetD
               <div>
                 <div className="font-display font-semibold text-sm" style={{ color: CATEGORY_COLOR[result.category] }}>{result.category}</div>
                 <div className="text-xs text-[var(--muted)] flex items-center gap-1">
-                  {React.createElement(CRISIS_ICON[result.type], { size: 12 })} {result.type} case
+                  {React.createElement(CRISIS_ICON[result.types[0]], { size: 12 })} {result.types.join(", ")} case
                   <span className="text-[10px] font-mono ml-1">
                     · {resultSource === "gemini" ? "scored by Gemini" : resultSource === "backend-fallback" ? "backend online, keyword fallback used" : "scored locally (backend offline)"}
                   </span>
@@ -700,9 +736,9 @@ function PatientView({ hospitals, requests, createRequest, backendOnline, onGetD
               </div>
             </div>
             <div>
-              <div className="text-xs font-semibold text-[var(--text)] mb-1.5">Specialists to alert</div>
+              <div className="text-xs font-semibold text-[var(--text)] mb-1.5">Specialties required</div>
               <div className="flex flex-wrap gap-1.5">
-                {(result.specialists?.length ? result.specialists : ["—"]).map((s) => (
+                {(result.types?.length ? result.types : ["—"]).map((s) => (
                   <span key={s} className="text-[11px] px-2 py-1 rounded-full bg-[var(--pill)] text-[var(--text)]">{s}</span>
                 ))}
               </div>
@@ -710,9 +746,9 @@ function PatientView({ hospitals, requests, createRequest, backendOnline, onGetD
           </div>
 
           <div>
-            <div className="text-xs font-semibold text-[var(--text)] mb-1.5">Immediate first aid — {result.type}</div>
+            <div className="text-xs font-semibold text-[var(--text)] mb-1.5">Immediate first aid — {result.types.join(", ")}</div>
             <ul className="text-xs text-[var(--text)] space-y-1 list-disc list-inside">
-              {(result.firstAid?.length ? result.firstAid : FIRST_AID[result.type]).map((tip) => <li key={tip}>{tip}</li>)}
+              {(result.firstAid?.length ? result.firstAid : FIRST_AID[result.types[0]]).map((tip) => <li key={tip}>{tip}</li>)}
             </ul>
             <p className="text-[10px] text-[var(--muted)] mt-1.5">This is general guidance, not a diagnosis. Follow instructions from emergency responders once they arrive.</p>
           </div>
@@ -722,7 +758,7 @@ function PatientView({ hospitals, requests, createRequest, backendOnline, onGetD
       {result && !myRequest && (
         <section>
           <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-            <h2 className="font-display font-semibold text-base">Ranked hospitals for {result.type}</h2>
+            <h2 className="font-display font-semibold text-base">Ranked hospitals for {result.types.join(", ")}</h2>
             <div className="flex items-center gap-2">
               <span className="text-[10px] font-mono text-[var(--muted)]">
                 {rankSource === "backend" ? "from backend_server.js" : "local fallback — backend offline"}
@@ -768,12 +804,17 @@ function RankedHospitalCard({ h, rank, onGetDirections }) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <h3 className="font-display font-semibold text-[14px] truncate">{h.name}</h3>
-          {rank === 1 && <span className="text-[9px] font-medium px-1.5 py-0.5 rounded bg-[var(--accentBg)] text-[var(--accentText)]">TOP MATCH</span>}
+          {rank === 1 && <span className="text-[9px] font-medium px-1.5 py-0.5 rounded" style={{ background: "var(--accentBg)", color: "var(--accentText)" }}>TOP MATCH</span>}
         </div>
         <div className="flex items-center gap-3 mt-1 text-[11px] text-[var(--muted)] font-mono flex-wrap">
           <span className="flex items-center gap-1"><MapPin size={10} />{h.distanceKm} km</span>
           <span className="flex items-center gap-1"><Navigation2 size={10} />{h.eta} min ETA</span>
           <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full pulse-dot" style={{ background: fColor }} />{freshnessLabel(h.freshness[h.resourceKey])}</span>
+          {h.specialtyMatch && (
+            <span className="flex items-center gap-1 font-medium" style={{ color: "var(--accentBg)" }}>
+              <CheckCircle2 size={10} /> Match
+            </span>
+          )}
         </div>
       </div>
       <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg shrink-0" style={{ background: has ? `${C.green}18` : `${C.red}18` }}>
@@ -852,15 +893,20 @@ function HospitalView({ hospitals, requests, adjustStock, toggleHospitalSpecialt
       </section>
 
       <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <div className="text-xs font-mono text-[var(--muted)] mb-1">This facility specialises in</div>
+        <div className="relative">
+          <div className="text-xs font-mono text-[var(--muted)] mb-2">Select hospital specialties (click to add/remove):</div>
           <div className="flex items-center gap-2 flex-wrap">
-            {CRISIS_TYPES.map((t) => (
-              <button key={t} onClick={() => toggleHospitalSpecialty(hospitalId, t)}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs border ${specialties.includes(t) ? "bg-[var(--accentBg)] text-[var(--accentText)] border-[var(--accentBg)]" : "bg-[var(--surface)] border-[var(--border)] text-[var(--text)]"}`}>
-                {React.createElement(CRISIS_ICON[t], { size: 12 })}{t}
-              </button>
-            ))}
+            {CRISIS_TYPES.map((t) => {
+              const isSelected = specialties.includes(t);
+              return (
+                <button key={t} onClick={() => toggleHospitalSpecialty(hospitalId, t)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${isSelected ? "border-[var(--accentBg)] shadow-sm" : "border-[var(--border)] opacity-70 hover:opacity-100"}`}
+                  style={{ background: isSelected ? "var(--accentBg)" : "var(--surface)", color: isSelected ? "var(--accentText)" : "var(--text)" }}>
+                  {isSelected ? <CheckCircle2 size={13} /> : <Plus size={13} />}
+                  {t}
+                </button>
+              );
+            })}
           </div>
         </div>
         <span className="text-[11px] font-mono text-[var(--muted)] flex items-center gap-1"><CheckCircle2 size={12} color={C.green} /> EHR auto-sync connected</span>
@@ -886,7 +932,7 @@ function HospitalView({ hospitals, requests, adjustStock, toggleHospitalSpecialt
                   <span className="font-mono text-3xl font-semibold" style={{ color: count > 0 ? "var(--text)" : C.red }}>{String(count).padStart(2, "0")}</span>
                   <div className="flex items-center gap-1">
                     <button onClick={() => adjustStock(hospital.id, r.key, -1)} className="w-7 h-7 rounded-md border border-[var(--border)] flex items-center justify-center hover:bg-[var(--pillHover)]"><Minus size={13} /></button>
-                    <button onClick={() => adjustStock(hospital.id, r.key, 1)} className="w-7 h-7 rounded-md bg-[var(--accentBg)] text-[var(--accentText)] flex items-center justify-center hover:opacity-85"><Plus size={13} /></button>
+                    <button onClick={() => adjustStock(hospital.id, r.key, 1)} className="w-7 h-7 rounded-md flex items-center justify-center hover:opacity-85" style={{ background: "var(--accentBg)", color: "var(--accentText)" }}><Plus size={13} /></button>
                   </div>
                 </div>
               </div>
@@ -916,7 +962,8 @@ function HospitalView({ hospitals, requests, adjustStock, toggleHospitalSpecialt
                   <span className="text-[11px] text-[var(--muted)]">Confirm crisis type:</span>
                   {CRISIS_TYPES.slice(0, 6).map((t) => (
                     <button key={t} onClick={() => updateRequestCrisisType(r.id, t)}
-                      className={`text-[10px] px-2 py-1 rounded-full border ${(r.confirmedType || r.crisisTypeAI) === t ? "bg-[var(--accentBg)] text-[var(--accentText)] border-[var(--accentBg)]" : "border-[var(--border)] text-[var(--text)]"}`}>
+                      className={`text-[10px] px-2 py-1 rounded-full border ${(r.confirmedType || r.crisisTypeAI) === t ? "border-[var(--accentBg)]" : "border-[var(--border)]"}`}
+                      style={(r.confirmedType || r.crisisTypeAI) === t ? { background: "var(--accentBg)", color: "var(--accentText)" } : { color: "var(--text)" }}>
                       {t}
                     </button>
                   ))}

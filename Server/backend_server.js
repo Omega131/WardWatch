@@ -27,9 +27,10 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-let db = null;
-let hospitals = require("./mock_hospitals.json"); 
+let hospitals = [];
 let requests = [];
+let db = null;
+let firebaseLoaded = false;
 
 const serviceAccountPath = path.join(__dirname, "firebaseServiceAccountKey.json");
 if (fs.existsSync(serviceAccountPath)) {
@@ -39,19 +40,28 @@ if (fs.existsSync(serviceAccountPath)) {
         databaseURL: `https://wardwatch-f2045-default-rtdb.asia-southeast1.firebasedatabase.app`
     });
     db = getDatabase();
+    console.log("✅ Firebase initialized securely from Service Account!");
     
-    console.log("🔥 Firebase initialized securely from Service Account!");
-    
-    // Sync in-memory state with Firebase automatically
-    db.ref("hospitals").on("value", (snapshot) => {
+    // Initial fetch to prevent race conditions
+    db.ref("hospitals").once("value").then((snapshot) => {
         const data = snapshot.val();
         if (data && Array.isArray(data)) hospitals = data;
+        firebaseLoaded = true;
+        console.log("✅ Firebase hospitals loaded into memory");
+        
+        // Sync in-memory state with Firebase automatically
+        db.ref("hospitals").on("value", (snapshot) => {
+            const data = snapshot.val();
+            if (data && Array.isArray(data)) hospitals = data;
+        });
     });
+    
     db.ref("requests").on("value", (snapshot) => {
         const data = snapshot.val();
         if (data) requests = Object.values(data);
     });
 } else {
+    firebaseLoaded = true; // Memory-only mode
     console.warn("⚠️ firebaseServiceAccountKey.json not found! Running in memory-only fallback mode.");
 }
 
@@ -108,18 +118,18 @@ Respond with ONLY a JSON object (no markdown fences, no extra commentary) with e
 {
   "score": <integer 0-100, overall severity>,
   "category": <"Critical" | "Urgent" | "Stable">,
-  "type": <one of ${JSON.stringify(CRISIS_TYPES)}>,
+  "types": [<1 or more from ${JSON.stringify(CRISIS_TYPES)} that aptly describe the patient's requirements>],
   "ambulance": <true or false>,
   "resources": [<0-3 items, chosen only from ${JSON.stringify(RESOURCE_LABELS)}>],
-  "specialists": [<0-2 relevant specialist doctor types, e.g. "Cardiologist", "Trauma Surgeon", "Pulmonologist", "Neurologist", "Obstetrician", "Burn Specialist", "General Physician">],
+
   "firstAid": [<3-5 short, plain-language immediate first aid steps a bystander with no medical training can follow right now, each under 15 words>]
 }
 
 Rules:
-- score >= 70 means Critical, 35-69 Urgent, below 35 Stable — category MUST match score.
+- score >= 70 means Critical, 35-69 Urgent, below 35 Stable - category MUST match score.
 - ambulance MUST be true whenever score >= 55, false otherwise.
-- Base every field strictly on what was actually described — don't invent symptoms.
-- If the description is vague or clearly not a medical emergency, use score 0-10, category "Stable", type "General".`;
+- Base every field strictly on what was actually described - don't invent symptoms.
+- If the description is vague or clearly not a medical emergency, use score 0-10, category "Stable", types ["General"].`;
 
 async function callGeminiTriage(text) {
     if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not set");
@@ -151,8 +161,8 @@ async function callGeminiTriage(text) {
 
     // Belt-and-braces validation — never trust an LLM's output blindly for
     // something that gates an ambulance dispatch.
-    if (typeof parsed.score !== "number" || !CRISIS_TYPES.includes(parsed.type)) {
-        throw new Error("Gemini response failed shape validation");
+    if (typeof parsed.score !== "number" || !Array.isArray(parsed.types) || !parsed.types.every(t => CRISIS_TYPES.includes(t)) || parsed.types.length === 0) {
+        throw new Error("Gemini response failed shape validation: " + JSON.stringify(parsed));
     }
     parsed.score = Math.max(0, Math.min(100, Math.round(parsed.score)));
     parsed.category = parsed.score >= 70 ? "Critical" : parsed.score >= 35 ? "Urgent" : "Stable";
@@ -165,22 +175,24 @@ async function callGeminiTriage(text) {
 }
 
 function keywordFallbackTriage(text) {
-    let score = 0, bestType = "General", bestWeight = 0;
+    let score = 0;
+    const typesSet = new Set();
     const t = text.toLowerCase();
     KEYWORDS.forEach((k) => {
         if (t.includes(k.phrase)) {
             score += k.weight;
-            if (k.weight > bestWeight) { bestWeight = k.weight; bestType = k.type; }
+            typesSet.add(k.type);
         }
     });
+    if (typesSet.size === 0) typesSet.add("General");
     score = Math.min(100, score);
     const category = score >= 70 ? "Critical" : score >= 35 ? "Urgent" : "Stable";
-    const ambulance = score >= 55;
+    const types = Array.from(typesSet);
     return {
-        score, category, type: bestType, ambulance,
-        resources: [RESOURCE_KEY_TO_LABEL[CRISIS_RESOURCE[bestType]]],
-        specialists: SPECIALIST_BY_TYPE[bestType],
-        firstAid: FIRST_AID_BY_TYPE[bestType],
+        score, category, types, ambulance: score >= 55,
+        resources: [RESOURCE_KEY_TO_LABEL[CRISIS_RESOURCE[types[0]]]],
+        specialists: SPECIALIST_BY_TYPE[types[0]],
+        firstAid: FIRST_AID_BY_TYPE[types[0]],
     };
 }
 
@@ -189,15 +201,13 @@ function keywordFallbackTriage(text) {
 //                                   resources, specialists, firstAid, source }
 // ---------------------------------------------------------------------
 app.post("/api/triage", async (req, res) => {
-    const { text } = req.body;
-    if (!text) return res.status(400).json({ error: "text is required" });
-
     try {
-        const ai = await callGeminiTriage(text);
-        return res.json({ ...ai, source: "gemini" });
-    } catch (err) {
-        console.error("[triage] Gemini call failed, using keyword fallback:", err.message);
-        return res.json({ ...keywordFallbackTriage(text), source: "keyword-fallback" });
+        const result = await callGeminiTriage(req.body.text);
+        res.json({ ...result, source: "gemini" });
+    } catch (e) {
+        console.error("[Gemini Error]", e.message);
+        const fb = keywordFallbackTriage(req.body.text || "");
+        res.json({ ...fb, source: "keyword-fallback" });
     }
 });
 
@@ -210,6 +220,7 @@ app.post("/api/triage", async (req, res) => {
 // to sync its local state with whatever the backend currently holds.
 // ---------------------------------------------------------------------
 app.get("/api/hospitals", (req, res) => {
+    if (!firebaseLoaded) return res.status(503).json({ error: "Loading" });
     res.json(hospitals);
 });
 
@@ -225,26 +236,46 @@ app.post("/api/hospitals/sync", (req, res) => {
 });
 
 app.get("/api/hospitals/rank", async (req, res) => {
-    const { crisisType = "General" /*, lat, lng */ } = req.query;
-    const resourceKey = CRISIS_RESOURCE[crisisType] || "icu";
-
-    // TODO (real traffic data): replace baseEta*trafficX below with a live
-    // Distance Matrix call, e.g.:
-    //
-    // const dm = await mapsClient.distancematrix({
-    //   params: { origins: [`${lat},${lng}`], destinations: hospitals.map(h => h.address),
-    //             departure_time: "now", key: process.env.GOOGLE_MAPS_API_KEY },
-    // });
-    // const etas = dm.data.rows[0].elements.map(e => e.duration_in_traffic.value / 60);
+    let types = ["General"];
+    if (req.query.types) {
+        try {
+            types = JSON.parse(decodeURIComponent(req.query.types));
+            if (!Array.isArray(types) || types.length === 0) types = ["General"];
+        } catch {
+            types = ["General"];
+        }
+    } else if (req.query.crisisType) {
+        types = [req.query.crisisType];
+    }
+    
+    const resourceKey = CRISIS_RESOURCE[types[0]] || "icu";
 
     const ranked = hospitals.map((h) => {
-        const count = h.stock[resourceKey];
-        const eta = Math.round(h.baseEta * h.trafficX);
+        const count = h.stock[resourceKey] || 0;
+        const eta = h.baseEta ? Math.round(h.baseEta * h.trafficX) : 0;
         const resourceScore = Math.min(100, count * 25);
-        const etaScore = Math.max(0, 100 - eta * 4);
-        const capScore = (h.specialties && h.specialties.includes(crisisType)) ? 100 : (h.capability?.[crisisType] ?? 50);
-        const total = Math.round(0.4 * resourceScore + 0.3 * etaScore + 0.3 * capScore);
-        return { ...h, resourceKey, count, eta, total };
+        
+        let capScore = 50;
+        let specialtyMatch = false;
+        if (h.specialties && h.specialties.length > 0) {
+            const matched = types.filter(t => h.specialties.includes(t)).length;
+            capScore = Math.round((matched / types.length) * 100);
+            if (matched > 0) specialtyMatch = true;
+        } else {
+            const sum = types.reduce((acc, t) => acc + (h.capability?.[t] ?? 50), 0);
+            capScore = Math.round(sum / types.length);
+        }
+        
+        const trafficPenalty = Math.max(0, eta - (h.baseEta || 0)); // Extra minutes due to traffic
+        
+        const total = Math.round(
+          (0.5 * resourceScore) + 
+          (0.3 * capScore) - 
+          (1.5 * (h.distanceKm || 0)) - 
+          (2.0 * trafficPenalty)
+        );
+
+        return { ...h, resourceKey, count, eta, total, specialtyMatch };
     }).sort((a, b) => b.total - a.total);
 
     res.json(ranked);
