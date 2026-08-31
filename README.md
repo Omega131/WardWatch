@@ -5,9 +5,9 @@ The app has two parts that run separately: a React/Vite frontend and a small Nod
 ### 1. Frontend(to be run in the root folder)
 
 ```bash
-npm install
-npm install lucide-react
-npm install tailwindcss @tailwindcss/vite
+npm install --legacy-peer-deps
+npm install lucide-react --legacy-peer-deps
+npm install tailwindcss @tailwindcss/vite --legacy-peer-deps
 npm run dev
 ```
 
@@ -18,9 +18,9 @@ Opens at `http://localhost:5173`. Requires `lucide-react` and Tailwind (`tailwin
 In a **separate terminal**, from the `server/` folder:
 
 ```bash
-npm install
+npm install --legacy-peer-deps
 npm install react-router-dom --legacy-peer-deps
-npm install firebase-admin
+npm install firebase-admin --legacy-peer-deps
 node backend_server.js
 ```
 
