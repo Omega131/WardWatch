@@ -189,24 +189,24 @@ function rankHospitals(hospitals, types) {
     const count = h.stock[resourceKey] || 0;
     const eta = h.baseEta ? Math.round(h.baseEta * h.trafficX) : 0;
     const resourceScore = Math.min(100, count * 25);
-    
+
     let capScore = 50;
     if (h.specialties && h.specialties.length > 0) {
-        const matched = types.filter(t => h.specialties.includes(t)).length;
-        capScore = Math.round((matched / types.length) * 100);
+      const matched = types.filter(t => h.specialties.includes(t)).length;
+      capScore = Math.round((matched / types.length) * 100);
     } else {
-        const sum = types.reduce((acc, t) => acc + (h.capability?.[t] ?? 50), 0);
-        capScore = Math.round(sum / types.length);
+      const sum = types.reduce((acc, t) => acc + (h.capability?.[t] ?? 50), 0);
+      capScore = Math.round(sum / types.length);
     }
-    
+
     const trafficPenalty = Math.max(0, eta - (h.baseEta || 0)); // Extra minutes due to traffic
-    
+
     // New Formula: Priority to available resources (resourceScore + capScore).
     // Penalties for distance (km) and traffic (minutes).
     const total = Math.round(
-      (0.7 * resourceScore) + 
+      (0.7 * resourceScore) +
       (0.4 * capScore) +
-      (0.5 * (h.distanceKm || 0)) 
+      (0.5 * (h.distanceKm || 0))
     );
     return { ...h, resourceKey, count, eta, resourceScore, capScore, trafficPenalty, total };
   }).sort((a, b) => b.total - a.total);
@@ -216,8 +216,7 @@ function rankHospitals(hospitals, types) {
 
 // Point this at wherever backend_server.js is actually running. Left as
 // localhost:4000 to match `node backend_server.js`'s default PORT.
-const API_BASE = "http://localhost:4000";
-
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
 export default function App() {
   const [mode, setMode] = useState("patient");
   const [hospitals, setHospitals] = useState(HOSPITALS_INIT);
@@ -280,16 +279,16 @@ export default function App() {
           const nominatimUrl = `https://nominatim.openstreetmap.org/search?format=json&amenity=hospital&viewbox=${viewbox}&bounded=1&limit=15`;
           const res = await fetch(nominatimUrl);
           const data = await res.json();
-          
+
           if (data && data.length > 0) {
             baseHospitals = data.map((el, i) => {
               return {
                 id: `real_h${el.place_id}`,
-                name: el.name || `Local Hospital ${i+1}`,
+                name: el.name || `Local Hospital ${i + 1}`,
                 lat: parseFloat(el.lat),
                 lng: parseFloat(el.lon),
-                stock: { 
-                  icu: Math.floor(Math.random() * 5), 
+                stock: {
+                  icu: Math.floor(Math.random() * 5),
                   oxygen: Math.floor(Math.random() * 20),
                   bloodNeg: 0,
                   ventilator: 0,
@@ -308,7 +307,7 @@ export default function App() {
           console.warn("Nominatim API failed, falling back to mock hospitals", e);
         }
       }
-      
+
       if (baseHospitals.length === 0) {
         baseHospitals = HOSPITALS_INIT; // Fallback
       }
@@ -332,7 +331,7 @@ export default function App() {
         }
       }
       setHospitals(updatedHospitals);
-      
+
       // 4. Upload these real hospitals to the backend database ONLY IF we generated them
       if (!backendHasRealData && backendOnline) {
         try {
@@ -411,17 +410,17 @@ export default function App() {
     setHospitals((prev) => {
       const targetHospital = prev.find(h => h.id === hospitalId);
       if (!targetHospital) return prev;
-      
+
       const current = targetHospital.specialties || [];
       const updatedSpecialties = current.includes(type) ? current.filter(t => t !== type) : [...current, type];
-      
+
       if (backendOnline) {
         fetch(`${API_BASE}/api/hospitals/${hospitalId}/specialties`, {
           method: "PATCH", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ specialties: updatedSpecialties }),
-        }).catch(() => {});
+        }).catch(() => { });
       }
-      
+
       return prev.map((h) => h.id === hospitalId ? { ...h, specialties: updatedSpecialties } : h);
     });
   }
@@ -875,11 +874,11 @@ function HospitalAuth({ hospitals, onLogin }) {
     e.preventDefault();
     setError('');
     setLoading(true);
-    
+
     const endpoint = isLogin ? '/api/auth/login' : '/api/auth/signup';
     const body = { email, password };
     if (!isLogin) body.hospitalId = hospitalId;
-    
+
     try {
       const res = await fetch(`${API_BASE}${endpoint}`, {
         method: 'POST',
@@ -887,9 +886,9 @@ function HospitalAuth({ hospitals, onLogin }) {
         body: JSON.stringify(body)
       });
       const data = await res.json();
-      
+
       if (!res.ok) throw new Error(data.error || 'Authentication failed');
-      
+
       onLogin(data.hospitalId);
     } catch (err) {
       setError(err.message);
@@ -906,9 +905,9 @@ function HospitalAuth({ hospitals, onLogin }) {
         </div>
       </div>
       <h2 className="text-xl font-bold font-display mb-6 text-center">{isLogin ? 'Hospital Portal Login' : 'Hospital Portal Registration'}</h2>
-      
+
       {error && <div className="p-3 mb-4 text-sm text-red-500 bg-red-500/10 border border-red-500/20 rounded-lg">{error}</div>}
-      
+
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
           <label className="block text-xs font-semibold mb-1 text-[var(--muted)]">Email Address</label>
