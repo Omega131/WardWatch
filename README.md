@@ -2,7 +2,7 @@
 
 The app has two parts that run separately: a React/Vite frontend and a small Node/Express backend. The frontend works on its own with local mock data, but for the full experience (real-time triage scoring, live hospital ranking) run both.
 
-### 1. Frontend
+### 1. Frontend(to be run in the root folder)
 
 ```bash
 npm install
@@ -13,7 +13,7 @@ npm run dev
 
 Opens at `http://localhost:5173`. Requires `lucide-react` and Tailwind (`tailwindcss` + `@tailwindcss/vite`) — see `package.json` / `vite.config.js`.
 
-### 2. Backend (optional but recommended)
+### 2. Backend 
 
 In a **separate terminal**, from the `server/` folder:
 
