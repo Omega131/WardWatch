@@ -38,7 +38,7 @@ if (fs.existsSync(serviceAccountPath)) {
     const serviceAccount = require(serviceAccountPath);
     initializeApp({
         credential: cert(serviceAccount),
-        databaseURL: `https://wardwatch-f2045-default-rtdb.asia-southeast1.firebasedatabase.app`
+        databaseURL: `https://wardwatch2-default-rtdb.firebaseio.com`
     });
     db = getDatabase();
     console.log("✅ Firebase initialized securely from Service Account!");
