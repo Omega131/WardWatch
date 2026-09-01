@@ -294,19 +294,40 @@ app.get("/api/hospitals/rank", async (req, res) => {
         types = [req.query.crisisType];
     }
     
-    const resourceKey = CRISIS_RESOURCE[types[0]] || "icu";
+    let neededKeys = [];
+    if (req.query.resources) {
+        try {
+            const labels = JSON.parse(decodeURIComponent(req.query.resources));
+            if (Array.isArray(labels)) {
+                neededKeys = labels.map(label => {
+                    const entry = Object.entries(RESOURCE_KEY_TO_LABEL).find(([k, v]) => v === label);
+                    return entry ? entry[0] : null;
+                }).filter(Boolean);
+            }
+        } catch {}
+    }
+    if (neededKeys.length === 0) {
+        neededKeys = [CRISIS_RESOURCE[types[0]] || "icu"];
+    }
+    
+    // primary key for UI
+    const resourceKey = neededKeys[0] || "icu";
 
     const ranked = hospitals.map((h) => {
         const count = h.stock[resourceKey] || 0;
         const eta = h.baseEta ? Math.round(h.baseEta * h.trafficX) : 0;
-        const resourceScore = Math.min(100, count * 25);
+        
+        // Hospital gets proportional points for each requested resource they have in stock
+        const matchedCount = neededKeys.filter(key => (h.stock[key] || 0) > 0).length;
+        const resourceScore = neededKeys.length > 0 ? Math.round((matchedCount / neededKeys.length) * 100) : 0;
         
         let capScore = 50;
         let specialtyMatch = false;
         if (h.specialties && h.specialties.length > 0) {
             const matched = types.filter(t => h.specialties.includes(t)).length;
             capScore = Math.round((matched / types.length) * 100);
-            if (matched > 0) specialtyMatch = true;
+            if (matched === types.length) specialtyMatch = "full";
+            else if (matched > 0) specialtyMatch = "partial";
         } else {
             const sum = types.reduce((acc, t) => acc + (h.capability?.[t] ?? 50), 0);
             capScore = Math.round(sum / types.length);

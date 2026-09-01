@@ -192,18 +192,35 @@ function freshnessLabel(val) {
 }
 
 // hospital-ranking formula — mirrors backend/server.js rankHospitals()
-function rankHospitals(hospitals, types) {
+function rankHospitals(hospitals, types, neededResources = []) {
   if (!Array.isArray(types)) types = [types || "General"];
-  const resourceKey = CRISIS_RESOURCE[types[0]] || "icu";
+  
+  let neededKeys = (neededResources || []).map(label => {
+    const found = RESOURCES.find(r => r.label === label);
+    return found ? found.key : null;
+  }).filter(Boolean);
+
+  if (neededKeys.length === 0) {
+    neededKeys = [CRISIS_RESOURCE[types[0]] || "icu"];
+  }
+
+  const resourceKey = neededKeys[0] || "icu";
+
   return hospitals.map((h) => {
     const count = h.stock[resourceKey] || 0;
     const eta = h.baseEta ? Math.round(h.baseEta * h.trafficX) : 0;
-    const resourceScore = Math.min(100, count * 25);
+    
+    // Hospital gets proportional points for each requested resource they have in stock
+    const matchedCount = neededKeys.filter(key => (h.stock[key] || 0) > 0).length;
+    const resourceScore = neededKeys.length > 0 ? Math.round((matchedCount / neededKeys.length) * 100) : 0;
 
     let capScore = 50;
+    let specialtyMatch = false;
     if (h.specialties && h.specialties.length > 0) {
       const matched = types.filter(t => h.specialties.includes(t)).length;
       capScore = Math.round((matched / types.length) * 100);
+      if (matched === types.length) specialtyMatch = "full";
+      else if (matched > 0) specialtyMatch = "partial";
     } else {
       const sum = types.reduce((acc, t) => acc + (h.capability?.[t] ?? 50), 0);
       capScore = Math.round(sum / types.length);
@@ -211,14 +228,13 @@ function rankHospitals(hospitals, types) {
 
     const trafficPenalty = Math.max(0, eta - (h.baseEta || 0)); // Extra minutes due to traffic
 
-    // New Formula: Priority to available resources (resourceScore + capScore).
-    // Penalties for distance (km) and traffic (minutes).
     const total = Math.round(
-      (0.7 * resourceScore) +
-      (0.4 * capScore) +
-      (0.5 * (h.distanceKm || 0))
+      (0.5 * resourceScore) +
+      (0.3 * capScore) -
+      (1.5 * (h.distanceKm || 0)) -
+      (2.0 * trafficPenalty)
     );
-    return { ...h, resourceKey, count, eta, resourceScore, capScore, trafficPenalty, total };
+    return { ...h, resourceKey, count, eta, resourceScore, capScore, trafficPenalty, total, specialtyMatch };
   }).sort((a, b) => b.total - a.total);
 }
 
@@ -290,7 +306,9 @@ export default function App() {
 
         if (data && data.length > 0) {
           data.forEach((el, i) => {
-            const hid = `real_h${el.place_id}`;
+            // place_id is unstable and changes on OSM DB rebuilds.
+            // osm_type + osm_id is the globally stable OpenStreetMap identifier.
+            const hid = `osm_${el.osm_type}_${el.osm_id}`;
             if (!baseHospitals.some(h => h.id === hid)) {
               const newHosp = {
                 id: hid,
@@ -645,12 +663,13 @@ function PatientView({ hospitals, requests, createRequest, backendOnline, onGetD
     // ranks *its own* copy of the hospital data, not this tab's local state.
     try {
       const typesQuery = encodeURIComponent(JSON.stringify(severity.types));
-      const res = await fetch(`${API_BASE}/api/hospitals/rank?types=${typesQuery}`);
+      const resourcesQuery = encodeURIComponent(JSON.stringify(severity.resources || []));
+      const res = await fetch(`${API_BASE}/api/hospitals/rank?types=${typesQuery}&resources=${resourcesQuery}`);
       if (!res.ok) throw new Error();
       setRanked(await res.json());
       setRankSource("backend");
     } catch {
-      setRanked(rankHospitals(hospitals, severity.types)); // local fallback
+      setRanked(rankHospitals(hospitals, severity.types, severity.resources)); // local fallback
       setRankSource("local");
     }
     setAnalyzing(false);
@@ -820,7 +839,7 @@ function RankedHospitalCard({ h, rank, onGetDirections }) {
           <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full pulse-dot" style={{ background: fColor }} />{freshnessLabel(h.freshness[h.resourceKey])}</span>
           {h.specialtyMatch && (
             <span className="flex items-center gap-1 font-medium" style={{ color: "var(--accentBg)" }}>
-              <CheckCircle2 size={10} /> Match
+              <CheckCircle2 size={10} /> {h.specialtyMatch === "full" ? "Full Match" : "Partial Match"}
             </span>
           )}
         </div>
@@ -950,7 +969,17 @@ function HospitalAuth({ hospitals, onLogin }) {
 // HOSPITAL VIEW
 // ---------------------------------------------------------------------------
 function HospitalView({ hospitals, requests, adjustStock, toggleHospitalSpecialty, updateRequestCrisisType, globalCrisis, setGlobalCrisis, authHospitalId, onLogout }) {
-  const hospital = hospitals.find((h) => h.id === authHospitalId) || hospitals[0];
+  const hospital = hospitals.find((h) => h.id === authHospitalId);
+  if (!hospital) {
+    return (
+      <div className="text-center py-10">
+        <h2 className="text-lg font-semibold mb-2">Hospital Not Found</h2>
+        <p className="text-sm text-[var(--muted)] mb-4">Your associated hospital profile could not be found. It may have been removed or the ID has changed.</p>
+        <button onClick={onLogout} className="px-4 py-2 bg-[var(--border)] rounded-lg text-sm hover:bg-[var(--surface)] transition-colors">Logout</button>
+      </div>
+    );
+  }
+
   const hospitalId = hospital.id;
   const incoming = requests.filter((r) => r.hospitalId === hospitalId);
   const specialties = hospital.specialties || [];
