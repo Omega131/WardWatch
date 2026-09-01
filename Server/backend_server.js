@@ -281,41 +281,29 @@ app.post("/api/hospitals/sync", async (req, res) => {
     }
 });
 
-app.get("/api/hospitals/rank", async (req, res) => {
+app.post("/api/hospitals/rank", (req, res) => {
     let types = ["General"];
-    if (req.query.types) {
-        try {
-            types = JSON.parse(decodeURIComponent(req.query.types));
-            if (!Array.isArray(types) || types.length === 0) types = ["General"];
-        } catch {
-            types = ["General"];
-        }
-    } else if (req.query.crisisType) {
-        types = [req.query.crisisType];
+    if (req.body.types && Array.isArray(req.body.types)) {
+        types = req.body.types;
     }
     
     let neededKeys = [];
-    if (req.query.resources) {
-        try {
-            const labels = JSON.parse(decodeURIComponent(req.query.resources));
-            if (Array.isArray(labels)) {
-                neededKeys = labels.map(label => {
-                    const entry = Object.entries(RESOURCE_KEY_TO_LABEL).find(([k, v]) => v === label);
-                    return entry ? entry[0] : null;
-                }).filter(Boolean);
-            }
-        } catch {}
+    if (req.body.resources && Array.isArray(req.body.resources)) {
+        neededKeys = req.body.resources.map(label => {
+            const entry = Object.entries(RESOURCE_KEY_TO_LABEL).find(([k, v]) => v === label);
+            return entry ? entry[0] : null;
+        }).filter(Boolean);
     }
     if (neededKeys.length === 0) {
         neededKeys = [CRISIS_RESOURCE[types[0]] || "icu"];
     }
     
-    // primary key for UI
+    const hospitalsToRank = req.body.hospitals || hospitals;
     const resourceKey = neededKeys[0] || "icu";
 
-    const ranked = hospitals.map((h) => {
+    const ranked = hospitalsToRank.map((h) => {
         const count = h.stock[resourceKey] || 0;
-        const eta = h.baseEta ? Math.round(h.baseEta * h.trafficX) : 0;
+        const eta = h.baseEta || 0;
         
         // Hospital gets proportional points for each requested resource they have in stock
         const matchedCount = neededKeys.filter(key => (h.stock[key] || 0) > 0).length;
@@ -333,13 +321,10 @@ app.get("/api/hospitals/rank", async (req, res) => {
             capScore = Math.round(sum / types.length);
         }
         
-        const trafficPenalty = Math.max(0, eta - (h.baseEta || 0)); // Extra minutes due to traffic
-        
         const total = Math.round(
           (0.5 * resourceScore) + 
           (0.3 * capScore) - 
-          (1.5 * (h.distanceKm || 0)) - 
-          (2.0 * trafficPenalty)
+          (1.5 * (h.distanceKm || 0))
         );
 
         return { ...h, resourceKey, count, eta, total, specialtyMatch };

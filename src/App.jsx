@@ -61,35 +61,35 @@ const CRISIS_ICON = {
 
 const HOSPITALS_INIT = [
   {
-    id: "h1", name: "Vantage Trauma Center", distanceKm: 3.1, baseEta: 9, trafficX: 1.15, lat: 12.9716, lng: 77.5946,
+    id: "h1", name: "Vantage Trauma Center", distanceKm: 3.1, baseEta: 9, lat: 12.9716, lng: 77.5946,
     stock: { icu: 2, bloodNeg: 4, ventilator: 1, trauma: 3, burn: 0, incubator: 1 },
     freshness: { icu: 2, bloodNeg: 6, ventilator: 2, trauma: 1, burn: 40, incubator: 9 },
     capability: { Cardiac: 70, Trauma: 92, Respiratory: 65, Burn: 40, Obstetric: 50, Neurological: 60, "Mass Casualty": 88, General: 70 },
     currentCrisisType: "Trauma", crisisModeLocal: false
   },
   {
-    id: "h2", name: "Sunrise Multispecialty", distanceKm: 5.6, baseEta: 14, trafficX: 1.3, lat: 12.9352, lng: 77.6245,
+    id: "h2", name: "Sunrise Multispecialty", distanceKm: 5.6, baseEta: 14, lat: 12.9352, lng: 77.6245,
     stock: { icu: 0, bloodNeg: 1, ventilator: 0, trauma: 1, burn: 2, incubator: 0 },
     freshness: { icu: 33, bloodNeg: 12, ventilator: 51, trauma: 4, burn: 3, incubator: 22 },
     capability: { Cardiac: 55, Trauma: 45, Respiratory: 60, Burn: 75, Obstetric: 65, Neurological: 50, "Mass Casualty": 40, General: 60 },
     currentCrisisType: "Burn", crisisModeLocal: false
   },
   {
-    id: "h3", name: "Ashirwad General Hospital", distanceKm: 2.2, baseEta: 6, trafficX: 1.05, lat: 12.9915, lng: 77.5942,
+    id: "h3", name: "Ashirwad General Hospital", distanceKm: 2.2, baseEta: 6, lat: 12.9915, lng: 77.5942,
     stock: { icu: 5, bloodNeg: 0, ventilator: 3, trauma: 2, burn: 1, incubator: 2 },
     freshness: { icu: 1, bloodNeg: 58, ventilator: 5, trauma: 1, burn: 15, incubator: 2 },
     capability: { Cardiac: 85, Trauma: 60, Respiratory: 80, Burn: 45, Obstetric: 70, Neurological: 75, "Mass Casualty": 55, General: 80 },
     currentCrisisType: "General", crisisModeLocal: false
   },
   {
-    id: "h4", name: "Green Valley Medical", distanceKm: 8.9, baseEta: 21, trafficX: 1.4, lat: 13.0104, lng: 77.5806,
+    id: "h4", name: "Green Valley Medical", distanceKm: 8.9, baseEta: 21, lat: 13.0104, lng: 77.5806,
     stock: { icu: 3, bloodNeg: 2, ventilator: 2, trauma: 0, burn: 0, incubator: 3 },
     freshness: { icu: 7, bloodNeg: 3, ventilator: 19, trauma: 60, burn: 60, incubator: 4 },
     capability: { Cardiac: 60, Trauma: 40, Respiratory: 55, Burn: 35, Obstetric: 88, Neurological: 55, "Mass Casualty": 45, General: 65 },
     currentCrisisType: "Obstetric", crisisModeLocal: false
   },
   {
-    id: "h5", name: "Kaveri District Hospital", distanceKm: 4.4, baseEta: 11, trafficX: 1.1, lat: 12.9279, lng: 77.6271,
+    id: "h5", name: "Kaveri District Hospital", distanceKm: 4.4, baseEta: 11, lat: 12.9279, lng: 77.6271,
     stock: { icu: 1, bloodNeg: 0, ventilator: 1, trauma: 2, burn: 3, incubator: 0 },
     freshness: { icu: 4, bloodNeg: 45, ventilator: 8, trauma: 2, burn: 6, incubator: 30 },
     capability: { Cardiac: 50, Trauma: 65, Respiratory: 60, Burn: 80, Obstetric: 55, Neurological: 45, "Mass Casualty": 60, General: 60 },
@@ -208,7 +208,7 @@ function rankHospitals(hospitals, types, neededResources = []) {
 
   return hospitals.map((h) => {
     const count = h.stock[resourceKey] || 0;
-    const eta = h.baseEta ? Math.round(h.baseEta * h.trafficX) : 0;
+    const eta = h.baseEta || 0;
     
     // Hospital gets proportional points for each requested resource they have in stock
     const matchedCount = neededKeys.filter(key => (h.stock[key] || 0) > 0).length;
@@ -226,15 +226,12 @@ function rankHospitals(hospitals, types, neededResources = []) {
       capScore = Math.round(sum / types.length);
     }
 
-    const trafficPenalty = Math.max(0, eta - (h.baseEta || 0)); // Extra minutes due to traffic
-
     const total = Math.round(
       (0.5 * resourceScore) +
       (0.3 * capScore) -
-      (1.5 * (h.distanceKm || 0)) -
-      (2.0 * trafficPenalty)
+      (1.5 * (h.distanceKm || 0))
     );
-    return { ...h, resourceKey, count, eta, resourceScore, capScore, trafficPenalty, total, specialtyMatch };
+    return { ...h, resourceKey, count, eta, resourceScore, capScore, total, specialtyMatch };
   }).sort((a, b) => b.total - a.total);
 }
 
@@ -326,7 +323,7 @@ export default function App() {
                 },
                 capability: { trauma: Math.floor(Math.random() * 100), cardiac: Math.floor(Math.random() * 100), respiratory: Math.floor(Math.random() * 100), neonatal: Math.floor(Math.random() * 100), burn: Math.floor(Math.random() * 100) },
                 freshness: { icu: Date.now(), oxygen: Date.now(), bloodNeg: Date.now(), ventilator: Date.now(), trauma: Date.now(), burn: Date.now(), incubator: Date.now() },
-                trafficX: 1.0 + (Math.random() * 0.4),
+                
                 specialties: [],
               };
               baseHospitals.push(newHosp);
@@ -662,9 +659,15 @@ function PatientView({ hospitals, requests, createRequest, backendOnline, onGetD
     // 2. Hospital ranking — try the backend's /api/hospitals/rank, which
     // ranks *its own* copy of the hospital data, not this tab's local state.
     try {
-      const typesQuery = encodeURIComponent(JSON.stringify(severity.types));
-      const resourcesQuery = encodeURIComponent(JSON.stringify(severity.resources || []));
-      const res = await fetch(`${API_BASE}/api/hospitals/rank?types=${typesQuery}&resources=${resourcesQuery}`);
+      const res = await fetch(`${API_BASE}/api/hospitals/rank`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          hospitals,
+          types: severity.types,
+          resources: severity.resources || []
+        })
+      });
       if (!res.ok) throw new Error();
       setRanked(await res.json());
       setRankSource("backend");
@@ -803,7 +806,7 @@ function PatientView({ hospitals, requests, createRequest, backendOnline, onGetD
             </div>
           )}
           <div className="space-y-2.5">
-            {ranked.map((h, i) => <RankedHospitalCard key={h.id} h={h} rank={i + 1} onGetDirections={onGetDirections} />)}
+            {ranked.slice(0, 6).map((h, i) => <RankedHospitalCard key={h.id} h={h} rank={i + 1} onGetDirections={onGetDirections} />)}
           </div>
           <button onClick={() => {
             if (result.ambulance) dispatch();
