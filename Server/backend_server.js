@@ -259,7 +259,13 @@ app.post("/api/hospitals/sync", async (req, res) => {
                         console.log(`Auto-created auth for ${h.name}: ${email}`);
                     } catch (e) {
                         if (e.code === 'auth/email-already-exists') {
-                            console.log(`Auth already exists for ${email}`);
+                            try {
+                                const userRecord = await getAuth().getUserByEmail(email);
+                                await db.ref(`users/${userRecord.uid}`).set({ hospitalId: h.id });
+                                console.log(`Auth already exists for ${email}. Re-linked to ${h.name}`);
+                            } catch (err) {
+                                console.error(`Error re-linking auth for ${h.name}:`, err.message);
+                            }
                         } else {
                             console.error(`Error auto-creating auth for ${h.name}:`, e.message);
                         }
