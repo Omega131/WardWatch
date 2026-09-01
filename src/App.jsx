@@ -178,8 +178,18 @@ function analyzeSeverity(text) {
 
 const CATEGORY_COLOR = { Critical: C.red, Urgent: C.amber, Stable: C.green };
 
-function freshnessColor(m) { return m <= 5 ? C.green : m <= 20 ? C.amber : C.red; }
-function freshnessLabel(m) { return m < 1 ? "just now" : m === 1 ? "1 min ago" : `${m} min ago`; }
+function getMinutesAgo(val) {
+  if (val < 1000000) return Math.floor(val); // Legacy format (minutes)
+  return Math.floor((Date.now() - val) / 60000);
+}
+function freshnessColor(val) {
+  const m = getMinutesAgo(val);
+  return m <= 5 ? C.green : m <= 20 ? C.amber : C.red;
+}
+function freshnessLabel(val) {
+  const m = getMinutesAgo(val);
+  return m < 1 ? "just now" : m === 1 ? "1 min ago" : `${m} min ago`;
+}
 
 // hospital-ranking formula — mirrors backend/server.js rankHospitals()
 function rankHospitals(hospitals, types) {
@@ -297,7 +307,7 @@ export default function App() {
                   incubator: 0
                 },
                 capability: { trauma: Math.floor(Math.random() * 100), cardiac: Math.floor(Math.random() * 100), respiratory: Math.floor(Math.random() * 100), neonatal: Math.floor(Math.random() * 100), burn: Math.floor(Math.random() * 100) },
-                freshness: { icu: 0, oxygen: 0, bloodNeg: 0, ventilator: 0, trauma: 0, burn: 0, incubator: 0 },
+                freshness: { icu: Date.now(), oxygen: Date.now(), bloodNeg: Date.now(), ventilator: Date.now(), trauma: Date.now(), burn: Date.now(), incubator: Date.now() },
                 trafficX: 1.0 + (Math.random() * 0.4),
                 specialties: [],
               };
@@ -361,14 +371,10 @@ export default function App() {
     }
   };
 
-  // Cosmetic freshness tick — purely local, doesn't need the backend.
+  const [, setTick] = useState(0);
   useEffect(() => {
-    const id = setInterval(() => {
-      setHospitals((prev) => prev.map((h) => ({
-        ...h,
-        freshness: Object.fromEntries(Object.entries(h.freshness).map(([k, v]) => [k, v + 1])),
-      })));
-    }, 3000);
+    // Force a re-render every minute so timestamp differences update accurately
+    const id = setInterval(() => setTick((t) => t + 1), 60000);
     return () => clearInterval(id);
   }, []);
 

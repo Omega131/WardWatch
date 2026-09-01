@@ -397,7 +397,7 @@ app.patch("/api/hospitals/:id/inventory", (req, res) => {
     
     const h = hospitals[hIndex];
     h.stock[key] = Math.max(0, h.stock[key] + delta);
-    h.freshness[key] = 0;
+    h.freshness[key] = Date.now();
     
     if (db) db.ref(`hospitals/${hIndex}`).set(h);
     res.json(h);
