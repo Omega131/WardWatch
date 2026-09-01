@@ -108,7 +108,10 @@ const KEYWORDS = [
 // there's no extra SDK version to keep in sync — just an API key.
 // Get a free key at https://aistudio.google.com/apikey
 // ---------------------------------------------------------------------
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_API_KEYS = process.env.GEMINI_API_KEYS 
+    ? process.env.GEMINI_API_KEYS.split(',').map(k => k.trim()) 
+    : [process.env.GEMINI_API_KEY].filter(Boolean);
+let currentKeyIndex = 0;
 const GEMINI_MODEL = "gemini-3.6-flash"; // gemini-2.0-flash was retired — this is Google's current stable Flash model
 
 const TRIAGE_SCHEMA_PROMPT = `You are an emergency medical triage assistant helping a 108-style dispatch platform. A caller has described the following situation:
@@ -132,13 +135,14 @@ Rules:
 - Base every field strictly on what was actually described - don't invent symptoms.
 - If the description is vague or clearly not a medical emergency, use score 0-10, category "Stable", types ["General"].`;
 
-async function callGeminiTriage(text) {
-    if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not set");
+async function callGeminiTriage(text, retryCount = 0) {
+    if (GEMINI_API_KEYS.length === 0) throw new Error("No Gemini API keys are set");
 
+    const currentKey = GEMINI_API_KEYS[currentKeyIndex];
     const prompt = TRIAGE_SCHEMA_PROMPT.replace("{{TEXT}}", text);
 
     const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${currentKey}`,
         {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -150,6 +154,15 @@ async function callGeminiTriage(text) {
     );
 
     if (!res.ok) {
+        if (res.status === 429) {
+            console.warn(`[Gemini API] Key at index ${currentKeyIndex} exhausted. Switching keys...`);
+            currentKeyIndex = (currentKeyIndex + 1) % GEMINI_API_KEYS.length;
+            
+            // Prevent infinite loop if ALL keys are exhausted
+            if (retryCount < GEMINI_API_KEYS.length) {
+                return callGeminiTriage(text, retryCount + 1);
+            }
+        }
         const errText = await res.text().catch(() => "");
         throw new Error(`Gemini API responded ${res.status}: ${errText.slice(0, 300)}`);
     }
