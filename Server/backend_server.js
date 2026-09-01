@@ -238,11 +238,37 @@ app.get("/api/hospitals", (req, res) => {
     res.json(hospitals);
 });
 
-app.post("/api/hospitals/sync", (req, res) => {
-    const localHospitals = req.body;
-    if (Array.isArray(localHospitals) && localHospitals.length > 0) {
-        hospitals = localHospitals;
-        if (db) db.ref("hospitals").set(hospitals);
+app.post("/api/hospitals/sync", async (req, res) => {
+    const newHospitals = req.body;
+    if (Array.isArray(newHospitals) && newHospitals.length > 0) {
+        // Merge into existing, avoiding duplicates by id
+        for (const h of newHospitals) {
+            if (!hospitals.some(existing => existing.id === h.id)) {
+                hospitals.push(h);
+                
+                // Auto-create Auth users for these hospitals if Firebase is connected
+                if (db) {
+                    let firstWord = h.name.split(" ")[0].toLowerCase().replace(/[^a-z0-9]/g, "");
+                    if (!firstWord) firstWord = "hospital";
+                    const email = `${firstWord}@gmail.com`;
+                    const password = "123456";
+                    
+                    try {
+                        const userRecord = await getAuth().createUser({ email, password });
+                        await db.ref(`users/${userRecord.uid}`).set({ hospitalId: h.id });
+                        console.log(`Auto-created auth for ${h.name}: ${email}`);
+                    } catch (e) {
+                        if (e.code === 'auth/email-already-exists') {
+                            console.log(`Auth already exists for ${email}`);
+                        } else {
+                            console.error(`Error auto-creating auth for ${h.name}:`, e.message);
+                        }
+                    }
+                }
+            }
+        }
+        
+        if (db) await db.ref("hospitals").set(hospitals);
         res.json({ success: true, count: hospitals.length });
     } else {
         res.status(400).json({ error: "Invalid hospital array" });

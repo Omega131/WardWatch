@@ -244,7 +244,6 @@ export default function App() {
     const fetchHospitalsAndRoutes = async () => {
       setScanning(true);
       let baseHospitals = [];
-      let backendHasRealData = false;
 
       // 1. Try to fetch existing hospitals from backend
       if (backendOnline) {
@@ -259,9 +258,8 @@ export default function App() {
             }
             if (res.ok) {
               const data = await res.json();
-              if (data && data.length > 0 && data.some(h => h.id.startsWith("real_"))) {
+              if (data && data.length > 0) {
                 baseHospitals = data;
-                backendHasRealData = true;
               }
             }
             break;
@@ -272,18 +270,20 @@ export default function App() {
         }
       }
 
-      // 2. If backend doesn't have real hospitals, scan Nominatim
-      if (!backendHasRealData) {
-        try {
-          const viewbox = `${userLocation.lng - 0.05},${userLocation.lat + 0.05},${userLocation.lng + 0.05},${userLocation.lat - 0.05}`;
-          const nominatimUrl = `https://nominatim.openstreetmap.org/search?format=json&amenity=hospital&viewbox=${viewbox}&bounded=1&limit=15`;
-          const res = await fetch(nominatimUrl);
-          const data = await res.json();
+      // 2. ALWAYS scan Nominatim for nearest 6 hospitals
+      let newHospitalsToSync = [];
+      try {
+        const viewbox = `${userLocation.lng - 0.05},${userLocation.lat + 0.05},${userLocation.lng + 0.05},${userLocation.lat - 0.05}`;
+        const nominatimUrl = `https://nominatim.openstreetmap.org/search?format=json&amenity=hospital&viewbox=${viewbox}&bounded=1&limit=6`;
+        const res = await fetch(nominatimUrl);
+        const data = await res.json();
 
-          if (data && data.length > 0) {
-            baseHospitals = data.map((el, i) => {
-              return {
-                id: `real_h${el.place_id}`,
+        if (data && data.length > 0) {
+          data.forEach((el, i) => {
+            const hid = `real_h${el.place_id}`;
+            if (!baseHospitals.some(h => h.id === hid)) {
+              const newHosp = {
+                id: hid,
                 name: el.name || `Local Hospital ${i + 1}`,
                 lat: parseFloat(el.lat),
                 lng: parseFloat(el.lon),
@@ -298,14 +298,16 @@ export default function App() {
                 },
                 capability: { trauma: Math.floor(Math.random() * 100), cardiac: Math.floor(Math.random() * 100), respiratory: Math.floor(Math.random() * 100), neonatal: Math.floor(Math.random() * 100), burn: Math.floor(Math.random() * 100) },
                 freshness: { icu: 0, oxygen: 0, bloodNeg: 0, ventilator: 0, trauma: 0, burn: 0, incubator: 0 },
-                trafficX: 1.0 + (Math.random() * 0.4), // mock live traffic
-                specialties: [], // Add an empty specialties array
+                trafficX: 1.0 + (Math.random() * 0.4),
+                specialties: [],
               };
-            }).filter(h => h.name && h.lat && h.lng);
-          }
-        } catch (e) {
-          console.warn("Nominatim API failed, falling back to mock hospitals", e);
+              baseHospitals.push(newHosp);
+              newHospitalsToSync.push(newHosp);
+            }
+          });
         }
+      } catch (e) {
+        console.warn("Nominatim API failed", e);
       }
 
       if (baseHospitals.length === 0) {
@@ -332,13 +334,13 @@ export default function App() {
       }
       setHospitals(updatedHospitals);
 
-      // 4. Upload these real hospitals to the backend database ONLY IF we generated them
-      if (!backendHasRealData && backendOnline) {
+      // 4. Upload newly discovered hospitals to the backend database
+      if (newHospitalsToSync.length > 0 && backendOnline) {
         try {
           await fetch(`${API_BASE}/api/hospitals/sync`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(updatedHospitals)
+            body: JSON.stringify(newHospitalsToSync)
           });
         } catch (e) {
           console.warn("Failed to sync hospitals to backend", e);
