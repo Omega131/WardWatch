@@ -313,15 +313,15 @@ export default function App() {
                 lat: parseFloat(el.lat),
                 lng: parseFloat(el.lon),
                 stock: {
-                  icu: Math.floor(Math.random() * 5),
-                  oxygen: Math.floor(Math.random() * 20),
+                  icu: 0,
+                  oxygen: 0,
                   bloodNeg: 0,
                   ventilator: 0,
                   trauma: 0,
                   burn: 0,
                   incubator: 0
                 },
-                capability: { trauma: Math.floor(Math.random() * 100), cardiac: Math.floor(Math.random() * 100), respiratory: Math.floor(Math.random() * 100), neonatal: Math.floor(Math.random() * 100), burn: Math.floor(Math.random() * 100) },
+                capability: { Cardiac: 0, Trauma: 0, Respiratory: 0, Burn: 0, Obstetric: 0, Neurological: 0, "Mass Casualty": 0, General: 0 },
                 freshness: { icu: Date.now(), oxygen: Date.now(), bloodNeg: Date.now(), ventilator: Date.now(), trauma: Date.now(), burn: Date.now(), incubator: Date.now() },
                 
                 specialties: [],
