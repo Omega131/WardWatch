@@ -108,11 +108,22 @@ const KEYWORDS = [
 // there's no extra SDK version to keep in sync — just an API key.
 // Get a free key at https://aistudio.google.com/apikey
 // ---------------------------------------------------------------------
+const AI_PROVIDER = (process.env.AI_PROVIDER || "gemini").toLowerCase();
+
+// Gemini Setup
 const GEMINI_API_KEYS = process.env.GEMINI_API_KEYS 
     ? process.env.GEMINI_API_KEYS.split(',').map(k => k.trim()) 
     : [process.env.GEMINI_API_KEY].filter(Boolean);
 let currentKeyIndex = 0;
-const GEMINI_MODEL = "gemini-3.6-flash"; // gemini-2.0-flash was retired — this is Google's current stable Flash model
+const GEMINI_MODEL = "gemini-3.6-flash"; 
+
+// Groq Setup
+const GROQ_API_KEY = process.env.GROQ_API_KEY || "";
+const GROQ_MODEL = "llama-3.1-8b-instant";
+
+// Ollama Setup
+const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "llama3";
 
 const TRIAGE_SCHEMA_PROMPT = `You are an emergency medical triage assistant helping a 108-style dispatch platform. A caller has described the following situation:
 
@@ -135,11 +146,72 @@ Rules:
 - Base every field strictly on what was actually described - don't invent symptoms.
 - If the description is vague or clearly not a medical emergency, use score 0-10, category "Stable", types ["General"].`;
 
-async function callGeminiTriage(text, retryCount = 0) {
-    if (GEMINI_API_KEYS.length === 0) throw new Error("No Gemini API keys are set");
-
-    const currentKey = GEMINI_API_KEYS[currentKeyIndex];
+async function callAITriage(text) {
     const prompt = TRIAGE_SCHEMA_PROMPT.replace("{{TEXT}}", text);
+    let rawJson = "";
+
+    if (AI_PROVIDER === "groq") {
+        if (!GROQ_API_KEY) throw new Error("GROQ_API_KEY is missing");
+        const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${GROQ_API_KEY}` },
+            body: JSON.stringify({
+                model: GROQ_MODEL,
+                messages: [{ role: "user", content: prompt }],
+                response_format: { type: "json_object" },
+                temperature: 0.2
+            })
+        });
+        if (!res.ok) throw new Error(`Groq API Error: ${await res.text()}`);
+        const data = await res.json();
+        rawJson = data.choices?.[0]?.message?.content;
+        
+    } else if (AI_PROVIDER === "ollama") {
+        const res = await fetch(`${OLLAMA_URL}/api/generate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                model: OLLAMA_MODEL,
+                prompt: prompt,
+                format: "json",
+                stream: false,
+                options: { temperature: 0.2 }
+            })
+        });
+        if (!res.ok) throw new Error(`Ollama API Error: ${await res.text()}`);
+        const data = await res.json();
+        rawJson = data.response;
+
+    } else {
+        // Fallback to Gemini
+        rawJson = await callGeminiTriage(prompt);
+    }
+
+    if (!rawJson) throw new Error("AI returned no usable content");
+
+    // Sometimes LLMs (especially local ones) wrap JSON in markdown blocks even when told not to.
+    rawJson = rawJson.replace(/```json/gi, '').replace(/```/g, '').trim();
+    
+    const parsed = JSON.parse(rawJson);
+
+    // Belt-and-braces validation
+    if (typeof parsed.score !== "number" || !Array.isArray(parsed.types) || !parsed.types.every(t => CRISIS_TYPES.includes(t)) || parsed.types.length === 0) {
+        throw new Error("AI response failed shape validation: " + JSON.stringify(parsed));
+    }
+    parsed.score = Math.max(0, Math.min(100, Math.round(parsed.score)));
+    parsed.category = parsed.score >= 70 ? "Critical" : parsed.score >= 35 ? "Urgent" : "Stable";
+    parsed.ambulance = parsed.score >= 55;
+    parsed.resources = Array.isArray(parsed.resources) ? parsed.resources.filter((r) => RESOURCE_LABELS.includes(r)) : [];
+    parsed.specialists = Array.isArray(parsed.specialists) ? parsed.specialists.slice(0, 3) : [];
+    parsed.firstAid = Array.isArray(parsed.firstAid) ? parsed.firstAid.slice(0, 5) : [];
+
+    return parsed;
+}
+
+// Keeping the Gemini recursive retry logic separate since it's slightly complex
+async function callGeminiTriage(prompt, retryCount = 0) {
+    if (GEMINI_API_KEYS.length === 0) throw new Error("No Gemini API keys are set");
+    const currentKey = GEMINI_API_KEYS[currentKeyIndex];
 
     const res = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${currentKey}`,
@@ -157,10 +229,8 @@ async function callGeminiTriage(text, retryCount = 0) {
         if (res.status === 429) {
             console.warn(`[Gemini API] Key at index ${currentKeyIndex} exhausted. Switching keys...`);
             currentKeyIndex = (currentKeyIndex + 1) % GEMINI_API_KEYS.length;
-            
-            // Prevent infinite loop if ALL keys are exhausted
             if (retryCount < GEMINI_API_KEYS.length) {
-                return callGeminiTriage(text, retryCount + 1);
+                return callGeminiTriage(prompt, retryCount + 1);
             }
         }
         const errText = await res.text().catch(() => "");
@@ -168,24 +238,7 @@ async function callGeminiTriage(text, retryCount = 0) {
     }
 
     const data = await res.json();
-    const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!raw) throw new Error("Gemini returned no usable content (possibly blocked by safety filters)");
-
-    const parsed = JSON.parse(raw); // throws if Gemini didn't return valid JSON — caught by the route below
-
-    // Belt-and-braces validation — never trust an LLM's output blindly for
-    // something that gates an ambulance dispatch.
-    if (typeof parsed.score !== "number" || !Array.isArray(parsed.types) || !parsed.types.every(t => CRISIS_TYPES.includes(t)) || parsed.types.length === 0) {
-        throw new Error("Gemini response failed shape validation: " + JSON.stringify(parsed));
-    }
-    parsed.score = Math.max(0, Math.min(100, Math.round(parsed.score)));
-    parsed.category = parsed.score >= 70 ? "Critical" : parsed.score >= 35 ? "Urgent" : "Stable";
-    parsed.ambulance = parsed.score >= 55; // recomputed server-side — the cutoff is not the model's call to make
-    parsed.resources = Array.isArray(parsed.resources) ? parsed.resources.filter((r) => RESOURCE_LABELS.includes(r)) : [];
-    parsed.specialists = Array.isArray(parsed.specialists) ? parsed.specialists.slice(0, 3) : [];
-    parsed.firstAid = Array.isArray(parsed.firstAid) ? parsed.firstAid.slice(0, 5) : [];
-
-    return parsed;
+    return data?.candidates?.[0]?.content?.parts?.[0]?.text;
 }
 
 function keywordFallbackTriage(text) {
@@ -198,15 +251,16 @@ function keywordFallbackTriage(text) {
             typesSet.add(k.type);
         }
     });
-    if (typesSet.size === 0) typesSet.add("General");
-    score = Math.min(100, score);
+
     const category = score >= 70 ? "Critical" : score >= 35 ? "Urgent" : "Stable";
-    const types = Array.from(typesSet);
     return {
-        score, category, types, ambulance: score >= 55,
-        resources: [RESOURCE_KEY_TO_LABEL[CRISIS_RESOURCE[types[0]]]],
-        specialists: SPECIALIST_BY_TYPE[types[0]],
-        firstAid: FIRST_AID_BY_TYPE[types[0]],
+        score: Math.min(100, score),
+        category,
+        types: typesSet.size > 0 ? Array.from(typesSet) : ["General"],
+        ambulance: score >= 55,
+        resources: [],
+        specialists: [],
+        firstAid: ["Stay calm and observe"]
     };
 }
 
@@ -216,10 +270,10 @@ function keywordFallbackTriage(text) {
 // ---------------------------------------------------------------------
 app.post("/api/triage", async (req, res) => {
     try {
-        const result = await callGeminiTriage(req.body.text);
-        res.json({ ...result, source: "gemini" });
+        const result = await callAITriage(req.body.text);
+        res.json({ ...result, source: AI_PROVIDER });
     } catch (e) {
-        console.error("[Gemini Error]", e.message);
+        console.error(`[${AI_PROVIDER.toUpperCase()} Error]`, e.message);
         const fb = keywordFallbackTriage(req.body.text || "");
         res.json({ ...fb, source: "keyword-fallback" });
     }
