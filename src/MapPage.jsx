@@ -147,8 +147,8 @@ export default function MapPage() {
 
   return (
     <div className="flex flex-col h-screen w-screen bg-[var(--surface)] relative overflow-hidden">
-      <header className="px-6 py-4 border-b border-[var(--border)] flex items-center justify-between shadow-sm bg-white z-20 relative">
-        <div>
+      <header className="px-4 sm:px-6 py-4 border-b border-gray-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-0 shadow-sm bg-white z-20 relative">
+        <div className="w-full sm:w-auto overflow-hidden">
           <h1 className="text-xl font-display font-bold text-gray-900">Directions to {name}</h1>
           <div className="text-sm text-gray-500 mt-1 flex gap-4">
              {distanceKm > 0 && <span><MapPin size={14} className="inline mr-1"/>{distanceKm} km</span>}

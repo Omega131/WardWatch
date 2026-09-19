@@ -522,7 +522,7 @@ export default function App() {
                   <button key={t.key} onClick={() => setMode(t.key)}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${!active ? "text-[var(--muted)]" : ""}`}
                     style={active ? { background: "var(--accentBg)", color: "var(--accentText)" } : {}}>
-                    <Icon size={14} />{t.label}
+                    <Icon size={14} /><span className="hidden sm:inline">{t.label}</span>
                   </button>
                 );
               })}
@@ -829,32 +829,36 @@ function RankedHospitalCard({ h, rank, onGetDirections }) {
   const fColor = freshnessColor(h.freshness[h.resourceKey]);
   const has = h.count > 0;
   return (
-    <div className="rounded-xl border bg-[var(--surface)] p-3.5 flex items-center gap-4 hover:shadow-sm transition-shadow" style={{ borderColor: rank === 1 ? "var(--accentBg)" : "var(--border)" }}>
-      <span className="font-mono text-xs text-[var(--muted)] w-6 shrink-0">#{rank}</span>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <h3 className="font-display font-semibold text-[14px] truncate">{h.name}</h3>
-          {rank === 1 && <span className="text-[9px] font-medium px-1.5 py-0.5 rounded" style={{ background: "var(--accentBg)", color: "var(--accentText)" }}>TOP MATCH</span>}
-        </div>
-        <div className="flex items-center gap-3 mt-1 text-[11px] text-[var(--muted)] font-mono flex-wrap">
-          <span className="flex items-center gap-1"><MapPin size={10} />{h.distanceKm} km</span>
-          <span className="flex items-center gap-1"><Navigation2 size={10} />{h.eta} min ETA</span>
-          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full pulse-dot" style={{ background: fColor }} />{freshnessLabel(h.freshness[h.resourceKey])}</span>
-          {h.specialtyMatch && (
-            <span className="flex items-center gap-1 font-medium" style={{ color: "var(--accentBg)" }}>
-              <CheckCircle2 size={10} /> {h.specialtyMatch === "full" ? "Full Match" : "Partial Match"}
-            </span>
-          )}
+    <div className="rounded-xl border bg-[var(--surface)] p-3.5 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 hover:shadow-sm transition-shadow" style={{ borderColor: rank === 1 ? "var(--accentBg)" : "var(--border)" }}>
+      <div className="flex items-center gap-3 flex-1 min-w-0">
+        <span className="font-mono text-xs text-[var(--muted)] w-6 shrink-0">#{rank}</span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <h3 className="font-display font-semibold text-[14px] truncate">{h.name}</h3>
+            {rank === 1 && <span className="text-[9px] font-medium px-1.5 py-0.5 rounded" style={{ background: "var(--accentBg)", color: "var(--accentText)" }}>TOP MATCH</span>}
+          </div>
+          <div className="flex items-center gap-3 mt-1 text-[11px] text-[var(--muted)] font-mono flex-wrap">
+            <span className="flex items-center gap-1"><MapPin size={10} />{h.distanceKm} km</span>
+            <span className="flex items-center gap-1"><Navigation2 size={10} />{h.eta} min ETA</span>
+            <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full pulse-dot" style={{ background: fColor }} />{freshnessLabel(h.freshness[h.resourceKey])}</span>
+            {h.specialtyMatch && (
+              <span className="flex items-center gap-1 font-medium" style={{ color: "var(--accentBg)" }}>
+                <CheckCircle2 size={10} /> {h.specialtyMatch === "full" ? "Full Match" : "Partial Match"}
+              </span>
+            )}
+          </div>
         </div>
       </div>
-      <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg shrink-0" style={{ background: has ? `${C.green}18` : `${C.red}18` }}>
-        <Icon size={13} color={has ? C.green : C.red} />
-        <span className="font-mono text-sm font-semibold" style={{ color: has ? C.green : C.red }}>{h.count}</span>
+      <div className="flex items-center gap-3 pl-9 sm:pl-0">
+        <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg shrink-0" style={{ background: has ? `${C.green}18` : `${C.red}18` }}>
+          <Icon size={13} color={has ? C.green : C.red} />
+          <span className="font-mono text-sm font-semibold" style={{ color: has ? C.green : C.red }}>{h.count}</span>
+        </div>
+        <div className="font-mono text-sm font-semibold shrink-0 text-right">{h.total} pts</div>
+        <button onClick={() => onGetDirections(h)} className="px-3 py-1.5 rounded-lg text-[11px] font-medium border border-[var(--border)] hover:bg-[var(--pill)] transition-colors shrink-0 whitespace-nowrap ml-auto">
+          Get directions
+        </button>
       </div>
-      <div className="font-mono text-sm font-semibold shrink-0 w-8 text-right mr-1">{h.total}</div>
-      <button onClick={() => onGetDirections(h)} className="px-3 py-1.5 rounded-lg text-[11px] font-medium border border-[var(--border)] hover:bg-[var(--pill)] transition-colors shrink-0 whitespace-nowrap">
-        Get directions
-      </button>
     </div>
   );
 }
