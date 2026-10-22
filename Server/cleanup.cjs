@@ -5,9 +5,12 @@ const path = require("path");
 const serviceAccountPath = path.join(__dirname, "firebaseServiceAccountKey.json");
 const serviceAccount = require(serviceAccountPath);
 
+const databaseURL = process.env.FIREBASE_DATABASE_URL 
+    || (serviceAccount.project_id ? `https://${serviceAccount.project_id}-default-rtdb.firebaseio.com` : `https://wardwatch2-default-rtdb.firebaseio.com`);
+
 initializeApp({
     credential: cert(serviceAccount),
-    databaseURL: `https://wardwatch2-default-rtdb.firebaseio.com`
+    databaseURL: databaseURL
 });
 
 const db = getDatabase();

@@ -22,3 +22,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Environment & Sensitive Keys
+.env
+.env.*
+*.env
+firebaseServiceAccountKey.json
+*serviceAccountKey*.json
+*.pem

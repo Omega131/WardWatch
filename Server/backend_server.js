@@ -36,12 +36,16 @@ let firebaseLoaded = false;
 const serviceAccountPath = path.join(__dirname, "firebaseServiceAccountKey.json");
 if (fs.existsSync(serviceAccountPath)) {
     const serviceAccount = require(serviceAccountPath);
+    const databaseURL = process.env.FIREBASE_DATABASE_URL 
+        || (serviceAccount.project_id ? `https://${serviceAccount.project_id}-default-rtdb.firebaseio.com` : `https://wardwatch2-default-rtdb.firebaseio.com`);
+    
     initializeApp({
         credential: cert(serviceAccount),
-        databaseURL: `https://wardwatch2-default-rtdb.firebaseio.com`
+        databaseURL: databaseURL
     });
     db = getDatabase();
     console.log("✅ Firebase initialized securely from Service Account!");
+    console.log(`📡 Connected to Database: ${databaseURL}`);
     
     // Initial fetch to prevent race conditions
     db.ref("hospitals").once("value").then((snapshot) => {
