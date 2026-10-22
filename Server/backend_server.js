@@ -48,11 +48,36 @@ if (fs.existsSync(serviceAccountPath)) {
     console.log(`📡 Connected to Database: ${databaseURL}`);
     
     // Initial fetch to prevent race conditions
-    db.ref("hospitals").once("value").then((snapshot) => {
+    db.ref("hospitals").once("value").then(async (snapshot) => {
         const data = snapshot.val();
-        if (data && Array.isArray(data)) hospitals = data;
+        let mockH = [];
+        try { mockH = require("./mock_hospitals.json"); } catch (e) {}
+
+        if (data && Array.isArray(data) && data.length > 0) {
+            let updated = false;
+            hospitals = data.map(h => {
+                const match = mockH.find(m => m.id === h.id);
+                if (match && (!h.lat || !h.lng)) {
+                    updated = true;
+                    return { ...h, lat: match.lat, lng: match.lng };
+                }
+                return h;
+            });
+            if (updated) {
+                await db.ref("hospitals").set(hospitals);
+                console.log("📍 Enriched Firebase hospitals with lat/lng coordinates");
+            }
+        } else {
+            try {
+                hospitals = mockH;
+                await db.ref("hospitals").set(hospitals);
+                console.log("🌱 Seeded initial hospitals into Firebase database");
+            } catch (err) {
+                console.warn("Could not seed mock_hospitals.json:", err.message);
+            }
+        }
         firebaseLoaded = true;
-        console.log("✅ Firebase hospitals loaded into memory");
+        console.log(`✅ ${hospitals.length} Firebase hospitals loaded into memory`);
         
         // Sync in-memory state with Firebase automatically
         db.ref("hospitals").on("value", (snapshot) => {

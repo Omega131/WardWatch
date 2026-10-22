@@ -255,8 +255,13 @@ export default function App() {
     if ("geolocation" in navigator) {
       navigator.geolocation.getCurrentPosition(
         (pos) => setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-        (err) => console.warn("Geolocation error, using default location", err)
+        (err) => {
+          console.warn("Geolocation error or permission denied, using default location", err);
+          setUserLocation({ lat: 12.9716, lng: 77.5946 });
+        }
       );
+    } else {
+      setUserLocation({ lat: 12.9716, lng: 77.5946 });
     }
   }, []);
 
@@ -376,8 +381,14 @@ export default function App() {
   }, [userLocation, backendOnline]);
 
   const handleGetDirections = (h) => {
-    if (userLocation && h.lat && h.lng) {
-      const url = `/directions?uLat=${userLocation.lat}&uLng=${userLocation.lng}&hLat=${h.lat}&hLng=${h.lng}&name=${encodeURIComponent(h.name)}`;
+    const fallbackHosp = HOSPITALS_INIT.find(initH => initH.id === h.id || initH.name === h.name);
+    const uLat = userLocation?.lat ?? fallbackHosp?.lat ?? 12.9716;
+    const uLng = userLocation?.lng ?? fallbackHosp?.lng ?? 77.5946;
+    const hLat = h.lat || fallbackHosp?.lat || (uLat + 0.02);
+    const hLng = h.lng || fallbackHosp?.lng || (uLng + 0.02);
+
+    if (hLat && hLng) {
+      const url = `/directions?uLat=${uLat}&uLng=${uLng}&hLat=${hLat}&hLng=${hLng}&name=${encodeURIComponent(h.name)}`;
       window.open(url, "_blank");
     } else {
       alert("Location data is missing. Please ensure location services are enabled.");
