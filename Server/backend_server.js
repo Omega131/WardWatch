@@ -34,8 +34,28 @@ let db = null;
 let firebaseLoaded = false;
 
 const serviceAccountPath = path.join(__dirname, "firebaseServiceAccountKey.json");
+let serviceAccount = null;
+
 if (fs.existsSync(serviceAccountPath)) {
-    const serviceAccount = require(serviceAccountPath);
+    try {
+        serviceAccount = require(serviceAccountPath);
+    } catch (e) {
+        console.error("Error reading firebaseServiceAccountKey.json:", e.message);
+    }
+} else if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    try {
+        serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    } catch {
+        try {
+            const decoded = Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT, "base64").toString("utf8");
+            serviceAccount = JSON.parse(decoded);
+        } catch (e) {
+            console.error("Failed to parse FIREBASE_SERVICE_ACCOUNT environment variable:", e.message);
+        }
+    }
+}
+
+if (serviceAccount) {
     const databaseURL = process.env.FIREBASE_DATABASE_URL 
         || (serviceAccount.project_id ? `https://${serviceAccount.project_id}-default-rtdb.firebaseio.com` : `https://wardwatch2-default-rtdb.firebaseio.com`);
     
